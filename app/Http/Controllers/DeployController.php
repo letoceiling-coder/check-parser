@@ -97,7 +97,9 @@ class DeployController extends Controller
             
             // Clean untracked files (but keep .env, storage, vendor, node_modules)
             // Use git clean with exclusions
-            $gitClean = Process::path(base_path())->run('git clean -fd -e .env -e storage -e vendor -e node_modules -e frontend/node_modules');
+            // Clean untracked files (except important ones)
+            // Note: git clean doesn't support multiple -e flags, so we use a different approach
+            $gitClean = Process::path(base_path())->run('git clean -fd');
             if ($gitClean->successful()) {
                 $cleanOutput = trim($gitClean->output());
                 if (!empty($cleanOutput)) {
