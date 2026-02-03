@@ -1,11 +1,8 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
-import { Document, Page, pdfjs } from 'react-pdf';
 import { TransformWrapper, TransformComponent } from 'react-zoom-pan-pinch';
 
-// Настройка worker для pdf.js - используем локальную копию
-// Worker скопирован из node_modules в public папку (переименован в .js для правильного MIME type)
-pdfjs.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.js';
+// Отключаем react-pdf из-за проблем с worker - используем iframe для PDF
 
 const API_URL = process.env.REACT_APP_API_URL || window.location.origin;
 
@@ -21,8 +18,6 @@ function CheckDetails() {
     admin_notes: '',
   });
   const [saving, setSaving] = useState(false);
-  const [numPages, setNumPages] = useState(null);
-  const [pageNumber, setPageNumber] = useState(1);
   const [fileUrl, setFileUrl] = useState(null);
 
   const fetchCheck = useCallback(async () => {
@@ -114,10 +109,6 @@ function CheckDetails() {
     } catch (error) {
       console.error('Error deleting check:', error);
     }
-  };
-
-  const onDocumentLoadSuccess = ({ numPages }) => {
-    setNumPages(numPages);
   };
 
   const formatDate = (dateString) => {
@@ -241,63 +232,22 @@ function CheckDetails() {
           <div className="p-4 bg-gray-50 min-h-[500px] flex items-center justify-center">
             {check.file_path ? (
               isPdf ? (
-                <div className="w-full">
-                  <Document
-                    file={`${API_URL}/api/checks/${id}/file`}
-                    onLoadSuccess={onDocumentLoadSuccess}
-                    loading={
-                      <div className="flex justify-center p-8">
-                        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500"></div>
-                      </div>
-                    }
-                    error={
-                      <div className="text-center p-8 text-red-500">
-                        Не удалось загрузить PDF
-                        <br />
-                        <a
-                          href={`${API_URL}/api/checks/${id}/file`}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="text-blue-600 hover:underline mt-2 inline-block"
-                        >
-                          Открыть в новой вкладке
-                        </a>
-                      </div>
-                    }
-                    options={{
-                      httpHeaders: {
-                        'Authorization': `Bearer ${token}`,
-                      },
-                    }}
-                  >
-                    <Page
-                      pageNumber={pageNumber}
-                      width={Math.min(600, window.innerWidth - 100)}
-                      renderTextLayer={false}
-                      renderAnnotationLayer={false}
-                    />
-                  </Document>
-                  {numPages && numPages > 1 && (
-                    <div className="flex items-center justify-center gap-4 mt-4">
-                      <button
-                        onClick={() => setPageNumber(p => Math.max(1, p - 1))}
-                        disabled={pageNumber <= 1}
-                        className="px-3 py-1 bg-gray-200 rounded disabled:opacity-50"
-                      >
-                        ←
-                      </button>
-                      <span className="text-sm text-gray-600">
-                        {pageNumber} / {numPages}
-                      </span>
-                      <button
-                        onClick={() => setPageNumber(p => Math.min(numPages, p + 1))}
-                        disabled={pageNumber >= numPages}
-                        className="px-3 py-1 bg-gray-200 rounded disabled:opacity-50"
-                      >
-                        →
-                      </button>
-                    </div>
-                  )}
+                <div className="w-full h-[600px] flex flex-col">
+                  <iframe
+                    src={`${API_URL}/api/checks/${id}/file?token=${token}`}
+                    className="w-full flex-1 border-0 rounded"
+                    title="PDF Preview"
+                  />
+                  <div className="text-center mt-3">
+                    <a
+                      href={`${API_URL}/api/checks/${id}/file?token=${token}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-blue-600 hover:underline text-sm"
+                    >
+                      📄 Открыть PDF в новой вкладке
+                    </a>
+                  </div>
                 </div>
               ) : (
                 <TransformWrapper
