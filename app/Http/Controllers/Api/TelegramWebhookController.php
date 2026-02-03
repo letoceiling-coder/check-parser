@@ -102,8 +102,8 @@ class TelegramWebhookController extends Controller
             return;
         }
 
-        // Handle document (check image file)
-        if ($document && $this->isImageDocument($document)) {
+        // Handle document (check image file or PDF)
+        if ($document && ($this->isImageDocument($document) || $this->isPdfDocument($document))) {
             $this->handleDocument($bot, $chatId, $document);
             return;
         }
@@ -120,8 +120,8 @@ class TelegramWebhookController extends Controller
     private function handleStartCommand(TelegramBot $bot, int $chatId): void
     {
         $welcomeMessage = "👋 Привет! Я бот для обработки чеков.\n\n";
-        $welcomeMessage .= "📸 Отправьте мне фото чека, и я извлеку из него информацию.\n\n";
-        $welcomeMessage .= "Просто отправьте фото чека, и я обработаю его!";
+        $welcomeMessage .= "📸 Отправьте мне фото чека или PDF документ, и я извлеку сумму платежа.\n\n";
+        $welcomeMessage .= "Просто отправьте фото или PDF чека, и я обработаю его!";
 
         $this->sendMessage($bot, $chatId, $welcomeMessage);
     }
@@ -176,12 +176,12 @@ class TelegramWebhookController extends Controller
                 Log::info("Downloaded file", ['path' => $filePath, 'size' => $file['file_size'] ?? 0]);
                 $processedFiles[] = $filePath;
 
-                // Process check (QR code parsing) - try original first, then preprocessed versions
-                Log::info("Starting QR code extraction", ['file' => $filePath]);
-                $checkData = $this->processCheck($filePath);
+                // Process check using OCR
+                Log::info("Starting OCR processing", ['file' => $filePath]);
+                $checkData = $this->processCheckWithOCR($filePath, false);
                 
                 if ($checkData) {
-                    Log::info("QR code successfully extracted!", ['check_data' => $checkData]);
+                    Log::info("Check data successfully extracted!", ['check_data' => $checkData]);
                     // Success! Clean up and return
                     foreach ($processedFiles as $pf) {
                         Storage::disk('local')->delete($pf);
@@ -189,7 +189,7 @@ class TelegramWebhookController extends Controller
                     $this->sendCheckResult($bot, $chatId, $checkData);
                     return;
                 } else {
-                    Log::warning("QR code extraction failed for photo size {$index}");
+                    Log::warning("OCR extraction failed for photo size {$index}");
                 }
             }
 
@@ -240,14 +240,14 @@ class TelegramWebhookController extends Controller
                 return;
             }
 
-            // Process check (QR code parsing)
-            $checkData = $this->processCheck($filePath);
+            // Process check using OCR
+            $checkData = $this->processCheckWithOCR($filePath, $this->isPdfDocument($document));
 
             // Send result
             if ($checkData) {
                 $this->sendCheckResult($bot, $chatId, $checkData);
             } else {
-                $this->sendMessage($bot, $chatId, '❌ Не удалось распознать QR код на чеке. Убедитесь, что фото четкое и QR код виден.');
+                $this->sendMessage($bot, $chatId, '❌ Не удалось распознать текст на чеке. Убедитесь, что фото четкое и текст хорошо виден.');
             }
 
             // Clean up
@@ -259,12 +259,22 @@ class TelegramWebhookController extends Controller
     }
 
     /**
-     * Check if document is an image
+     * Check if document is an image or PDF
      */
     private function isImageDocument(array $document): bool
     {
         $mimeType = $document['mime_type'] ?? '';
-        return str_starts_with($mimeType, 'image/');
+        return str_starts_with($mimeType, 'image/') || $mimeType === 'application/pdf';
+    }
+
+    /**
+     * Check if document is PDF
+     */
+    private function isPdfDocument(array $document): bool
+    {
+        $mimeType = $document['mime_type'] ?? '';
+        $fileName = $document['file_name'] ?? '';
+        return $mimeType === 'application/pdf' || str_ends_with(strtolower($fileName), '.pdf');
     }
 
     /**
@@ -309,7 +319,72 @@ class TelegramWebhookController extends Controller
     }
 
     /**
-     * Process check - extract QR code and parse data
+     * Process check using OCR - extract text and parse payment amount
+     * Tries multiple OCR methods
+     */
+    private function processCheckWithOCR(string $filePath, bool $isPdf = false): ?array
+    {
+        try {
+            $fullPath = Storage::disk('local')->path($filePath);
+
+            // Convert PDF to image if needed
+            if ($isPdf) {
+                $fullPath = $this->convertPdfToImage($fullPath);
+                if (!$fullPath) {
+                    Log::error('Failed to convert PDF to image');
+                    return null;
+                }
+            }
+
+            // Try multiple OCR methods
+            $ocrMethods = [
+                'extractTextWithYandexVision',
+                'extractTextWithOCRspace',
+                'extractTextWithTesseract',
+                'extractTextWithGoogleVision',
+            ];
+
+            $extractedText = null;
+            foreach ($ocrMethods as $method) {
+                try {
+                    Log::info("Trying OCR method: {$method}");
+                    $text = $this->$method($fullPath);
+                    if ($text && !empty(trim($text))) {
+                        Log::info("Text extracted using {$method}", ['text_length' => strlen($text)]);
+                        $extractedText = $text;
+                        break;
+                    }
+                } catch (\Exception $e) {
+                    Log::debug("OCR method {$method} failed: " . $e->getMessage());
+                    continue;
+                }
+            }
+
+            if (!$extractedText) {
+                Log::warning('All OCR methods failed');
+                return null;
+            }
+
+            // Parse payment amount from text
+            $checkData = $this->parsePaymentAmount($extractedText);
+            
+            if ($checkData) {
+                Log::info('Payment amount parsed successfully', ['check_data' => $checkData]);
+                return $checkData;
+            }
+
+            Log::warning('Failed to parse payment amount from extracted text');
+            return null;
+        } catch (\Exception $e) {
+            Log::error('Error processing check with OCR: ' . $e->getMessage(), [
+                'trace' => $e->getTraceAsString()
+            ]);
+            return null;
+        }
+    }
+
+    /**
+     * Process check - extract QR code and parse data (legacy method, kept for compatibility)
      * Tries multiple methods and image preprocessing variations
      */
     private function processCheck(string $filePath): ?array
@@ -1024,6 +1099,292 @@ PYTHON;
     }
 
     /**
+     * Convert PDF to image for OCR processing
+     */
+    private function convertPdfToImage(string $pdfPath): ?string
+    {
+        try {
+            // Check if Imagick is available and supports PDF
+            if (!extension_loaded('imagick')) {
+                Log::warning('Imagick not available for PDF conversion');
+                return null;
+            }
+
+            $image = new \Imagick();
+            $image->setResolution(300, 300); // High resolution for better OCR
+            $image->readImage($pdfPath . '[0]'); // Read first page only
+            
+            $imagePath = 'telegram/pdf_' . uniqid() . '.jpg';
+            $image->setImageFormat('jpg');
+            $image->setImageCompressionQuality(95);
+            $image->writeImage(Storage::disk('local')->path($imagePath));
+            $image->destroy();
+
+            return Storage::disk('local')->path($imagePath);
+        } catch (\Exception $e) {
+            Log::error('PDF conversion failed: ' . $e->getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * Extract text using Yandex Vision API
+     */
+    private function extractTextWithYandexVision(string $filePath): ?string
+    {
+        try {
+            $apiKey = env('YANDEX_VISION_API_KEY');
+            if (!$apiKey) {
+                Log::debug('Yandex Vision API key not configured');
+                return null;
+            }
+
+            $base64Image = base64_encode(file_get_contents($filePath));
+            
+            $response = Http::timeout(30)
+                ->withHeaders([
+                    'Authorization' => 'Api-Key ' . $apiKey,
+                    'Content-Type' => 'application/json'
+                ])
+                ->post('https://vision.api.cloud.yandex.net/vision/v1/textDetection', [
+                    'folderId' => env('YANDEX_FOLDER_ID', ''),
+                    'analyzeSpecs' => [
+                        [
+                            'content' => $base64Image,
+                            'features' => [
+                                ['type' => 'TEXT_DETECTION']
+                            ]
+                        ]
+                    ]
+                ]);
+
+            if ($response->successful()) {
+                $data = $response->json();
+                $text = '';
+                
+                if (isset($data['results'][0]['textDetection']['pages'][0]['blocks'])) {
+                    foreach ($data['results'][0]['textDetection']['pages'][0]['blocks'] as $block) {
+                        foreach ($block['lines'] ?? [] as $line) {
+                            foreach ($line['words'] ?? [] as $word) {
+                                $text .= ($word['text'] ?? '') . ' ';
+                            }
+                            $text .= "\n";
+                        }
+                    }
+                }
+                
+                return !empty(trim($text)) ? trim($text) : null;
+            }
+
+            return null;
+        } catch (\Exception $e) {
+            Log::debug('Yandex Vision OCR failed: ' . $e->getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * Extract text using OCR.space API (free tier available)
+     */
+    private function extractTextWithOCRspace(string $filePath): ?string
+    {
+        try {
+            $apiKey = env('OCR_SPACE_API_KEY', 'helloworld'); // Free tier key
+            
+            $response = Http::timeout(60)
+                ->attach('file', file_get_contents($filePath), basename($filePath))
+                ->post('https://api.ocr.space/parse/image', [
+                    'apikey' => $apiKey,
+                    'language' => 'rus', // Russian language
+                    'isOverlayRequired' => false,
+                    'detectOrientation' => true,
+                ]);
+
+            if ($response->successful()) {
+                $data = $response->json();
+                
+                if (isset($data['ParsedResults'][0]['ParsedText'])) {
+                    return trim($data['ParsedResults'][0]['ParsedText']);
+                }
+            }
+
+            return null;
+        } catch (\Exception $e) {
+            Log::debug('OCR.space API failed: ' . $e->getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * Extract text using Tesseract OCR (requires tesseract installed)
+     */
+    private function extractTextWithTesseract(string $filePath): ?string
+    {
+        try {
+            // Check if tesseract is available
+            $tesseractPath = exec('which tesseract 2>/dev/null');
+            if (!$tesseractPath) {
+                Log::debug('Tesseract not found');
+                return null;
+            }
+
+            // Run tesseract with Russian language
+            $outputPath = sys_get_temp_dir() . '/tesseract_' . uniqid();
+            $command = "tesseract {$filePath} {$outputPath} -l rus 2>/dev/null";
+            exec($command, $output, $returnCode);
+
+            if ($returnCode === 0 && file_exists($outputPath . '.txt')) {
+                $text = file_get_contents($outputPath . '.txt');
+                unlink($outputPath . '.txt');
+                return !empty(trim($text)) ? trim($text) : null;
+            }
+
+            return null;
+        } catch (\Exception $e) {
+            Log::debug('Tesseract OCR failed: ' . $e->getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * Extract text using Google Cloud Vision API
+     */
+    private function extractTextWithGoogleVision(string $filePath): ?string
+    {
+        try {
+            $apiKey = env('GOOGLE_VISION_API_KEY');
+            if (!$apiKey) {
+                Log::debug('Google Vision API key not configured');
+                return null;
+            }
+
+            $base64Image = base64_encode(file_get_contents($filePath));
+            
+            $response = Http::timeout(30)
+                ->post("https://vision.googleapis.com/v1/images:annotate?key={$apiKey}", [
+                    'requests' => [
+                        [
+                            'image' => [
+                                'content' => $base64Image
+                            ],
+                            'features' => [
+                                ['type' => 'TEXT_DETECTION']
+                            ]
+                        ]
+                    ]
+                ]);
+
+            if ($response->successful()) {
+                $data = $response->json();
+                
+                if (isset($data['responses'][0]['textAnnotations'][0]['description'])) {
+                    return trim($data['responses'][0]['textAnnotations'][0]['description']);
+                }
+            }
+
+            return null;
+        } catch (\Exception $e) {
+            Log::debug('Google Vision OCR failed: ' . $e->getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * Parse payment amount from extracted text
+     */
+    private function parsePaymentAmount(string $text): ?array
+    {
+        try {
+            Log::info('Parsing payment amount from text', ['text_length' => strlen($text)]);
+            
+            // Normalize text - remove extra spaces and newlines
+            $text = preg_replace('/\s+/', ' ', $text);
+            $text = mb_strtolower($text, 'UTF-8');
+            
+            // Patterns to find amount in Russian receipts
+            $patterns = [
+                // "Итого: 550 ₽" or "Итого 550 ₽"
+                '/итого[:\s]+(\d+[\.,]?\d*)\s*[₽руб]/ui',
+                // "Сумма: 550 ₽" or "Сумма 550 ₽"
+                '/сумма[:\s]+(\d+[\.,]?\d*)\s*[₽руб]/ui',
+                // "К оплате: 550 ₽"
+                '/к\s+оплате[:\s]+(\d+[\.,]?\d*)\s*[₽руб]/ui',
+                // "Всего: 550 ₽"
+                '/всего[:\s]+(\d+[\.,]?\d*)\s*[₽руб]/ui',
+                // Just find numbers with currency symbol
+                '/(\d+[\.,]?\d*)\s*[₽руб]/ui',
+                // Find large numbers (likely amounts)
+                '/(\d{3,}[\.,]?\d*)/u',
+            ];
+
+            $amount = null;
+            $date = null;
+
+            foreach ($patterns as $pattern) {
+                if (preg_match($pattern, $text, $matches)) {
+                    $amountStr = str_replace(',', '.', $matches[1]);
+                    $amount = (float) $amountStr;
+                    
+                    // Validate amount (should be reasonable)
+                    if ($amount > 0 && $amount < 1000000) {
+                        Log::info('Amount found using pattern', ['pattern' => $pattern, 'amount' => $amount]);
+                        break;
+                    }
+                }
+            }
+
+            // Try to find date
+            $datePatterns = [
+                '/(\d{2})[\.\/](\d{2})[\.\/](\d{4})\s+(\d{2}):(\d{2}):(\d{2})/u', // 03.02.2026 10:14:31
+                '/(\d{2})[\.\/](\d{2})[\.\/](\d{4})/u', // 03.02.2026
+                '/(\d{4})[\.\/-](\d{2})[\.\/-](\d{2})/u', // 2026-02-03
+            ];
+
+            foreach ($datePatterns as $pattern) {
+                if (preg_match($pattern, $text, $matches)) {
+                    try {
+                        if (count($matches) >= 4) {
+                            if (strlen($matches[1]) === 4) {
+                                // YYYY-MM-DD format
+                                $dateStr = "{$matches[1]}-{$matches[2]}-{$matches[3]}";
+                            } else {
+                                // DD.MM.YYYY format
+                                $dateStr = "{$matches[3]}-{$matches[2]}-{$matches[1]}";
+                            }
+                            
+                            if (isset($matches[4]) && isset($matches[5])) {
+                                $dateStr .= " {$matches[4]}:{$matches[5]}";
+                                if (isset($matches[6])) {
+                                    $dateStr .= ":{$matches[6]}";
+                                }
+                            }
+                            
+                            $date = $dateStr;
+                            break;
+                        }
+                    } catch (\Exception $e) {
+                        continue;
+                    }
+                }
+            }
+
+            if ($amount) {
+                return [
+                    'amount' => $amount,
+                    'date' => $date,
+                    'currency' => 'RUB',
+                    'raw_text' => substr($text, 0, 500), // Store first 500 chars for debugging
+                ];
+            }
+
+            return null;
+        } catch (\Exception $e) {
+            Log::error('Error parsing payment amount: ' . $e->getMessage());
+            return null;
+        }
+    }
+
+    /**
      * Parse check data from QR code string
      * Russian fiscal receipt format (ФНС)
      */
@@ -1082,24 +1443,36 @@ PYTHON;
      */
     private function sendCheckResult(TelegramBot $bot, int $chatId, array $checkData): void
     {
-        // Format sum - it may be in kopecks (integer) or rubles (float)
-        $sum = $checkData['sum'] ?? null;
-        $sumFormatted = 'Не указана';
-        if ($sum !== null) {
-            // If sum is greater than 10000, it's likely in kopecks, otherwise in rubles
-            if (is_numeric($sum) && $sum > 10000) {
-                $sumFormatted = number_format($sum / 100, 2, '.', ' ') . ' ₽';
-            } else {
-                $sumFormatted = number_format((float)$sum, 2, '.', ' ') . ' ₽';
-            }
-        }
-
         $message = "✅ Чек успешно обработан!\n\n";
-        $message .= "📅 Дата: " . ($checkData['date'] ?? 'Не указана') . "\n";
-        $message .= "💰 Сумма: {$sumFormatted}\n";
-        $message .= "🏪 ФН: " . ($checkData['fn'] ?? 'Не указан') . "\n";
-        $message .= "📄 ФД: " . ($checkData['fpd'] ?? 'Не указан') . "\n";
-        $message .= "🔐 ФП: " . ($checkData['fp'] ?? 'Не указан') . "\n";
+        
+        // Handle date
+        $date = $checkData['date'] ?? null;
+        if ($date) {
+            $message .= "📅 Дата: {$date}\n";
+        }
+        
+        // Handle amount (new OCR format) or sum (old QR format)
+        $amount = $checkData['amount'] ?? $checkData['sum'] ?? null;
+        if ($amount !== null) {
+            // If sum is greater than 10000, it's likely in kopecks, otherwise in rubles
+            if (is_numeric($amount) && $amount > 10000 && !isset($checkData['amount'])) {
+                $amountFormatted = number_format($amount / 100, 2, '.', ' ') . ' ₽';
+            } else {
+                $amountFormatted = number_format((float)$amount, 2, '.', ' ') . ' ₽';
+            }
+            $message .= "💰 Сумма: {$amountFormatted}\n";
+        }
+        
+        // Handle fiscal data (only for QR code receipts)
+        if (isset($checkData['fn'])) {
+            $message .= "🏪 ФН: " . ($checkData['fn'] ?? 'Не указан') . "\n";
+        }
+        if (isset($checkData['fpd'])) {
+            $message .= "📄 ФД: " . ($checkData['fpd'] ?? 'Не указан') . "\n";
+        }
+        if (isset($checkData['fp'])) {
+            $message .= "🔐 ФП: " . ($checkData['fp'] ?? 'Не указан') . "\n";
+        }
 
         $this->sendMessage($bot, $chatId, $message);
     }
