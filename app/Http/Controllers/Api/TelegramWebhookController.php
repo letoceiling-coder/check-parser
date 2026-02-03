@@ -1751,6 +1751,19 @@ PYTHON;
             // Normalize spaces in text for better number matching (convert all whitespace to single space)
             $textNormalized = preg_replace('/[\s\x{00A0}\x{2000}-\x{200B}\r\n]+/u', ' ', $text);
             
+            // Fix common OCR errors: replace letter O with digit 0 in number contexts
+            // "25 ООО" -> "25 000", "1О ООО" -> "10 000"
+            $textNormalized = preg_replace_callback(
+                '/(\d+)\s*([ОоOo]+)\s*([ОоOoрРеЕ₽])/u',
+                function ($m) {
+                    $zeros = preg_replace('/[ОоOo]/u', '0', $m[2]);
+                    return $m[1] . ' ' . $zeros . ' ' . $m[3];
+                },
+                $textNormalized
+            );
+            // Also fix standalone "ООО" after numbers: "25 ООО р" -> "25 000 р"
+            $textNormalized = preg_replace('/(\d+)\s+[ОоOo]{3}\s+([рРеЕ₽Pp])/u', '$1 000 $2', $textNormalized);
+            
             // Also try to find amounts with "Итого" or "Сумма" labels directly
             // This catches cases like "Итого\n10 000 Р" where number is on next line
             $directAmountPatterns = [
