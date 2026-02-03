@@ -21,4 +21,12 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/bot', [\App\Http\Controllers\Api\BotController::class, 'store']);
     Route::put('/bot/{id}', [\App\Http\Controllers\Api\BotController::class, 'update']);
     Route::post('/bot/{id}/test-webhook', [\App\Http\Controllers\Api\BotController::class, 'testWebhook']);
+    
+    // Check routes
+    Route::get('/checks', [\App\Http\Controllers\Api\CheckController::class, 'index']);
+    Route::get('/checks/stats', [\App\Http\Controllers\Api\CheckController::class, 'stats']);
+    Route::get('/checks/{id}', [\App\Http\Controllers\Api\CheckController::class, 'show']);
+    Route::put('/checks/{id}', [\App\Http\Controllers\Api\CheckController::class, 'update']);
+    Route::delete('/checks/{id}', [\App\Http\Controllers\Api\CheckController::class, 'destroy']);
+    Route::get('/checks/{id}/file', [\App\Http\Controllers\Api\CheckController::class, 'file']);
 });

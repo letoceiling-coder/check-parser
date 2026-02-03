@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Models\Check;
 use App\Models\TelegramBot;
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
@@ -105,6 +106,13 @@ class TelegramWebhookController extends Controller
         $text = $message['text'] ?? null;
         $photo = $message['photo'] ?? null;
         $document = $message['document'] ?? null;
+        
+        // Данные отправителя для статистики
+        $from = $message['from'] ?? [];
+        $userData = [
+            'username' => $from['username'] ?? null,
+            'first_name' => $from['first_name'] ?? null,
+        ];
 
         // Handle /start command
         if ($text && str_starts_with($text, '/start')) {
@@ -114,13 +122,13 @@ class TelegramWebhookController extends Controller
 
         // Handle photo (check image)
         if ($photo) {
-            $this->handlePhoto($bot, $chatId, $photo);
+            $this->handlePhoto($bot, $chatId, $photo, $userData);
             return;
         }
 
         // Handle document (check image file or PDF)
         if ($document && ($this->isImageDocument($document) || $this->isPdfDocument($document))) {
-            $this->handleDocument($bot, $chatId, $document);
+            $this->handleDocument($bot, $chatId, $document, $userData);
             return;
         }
 
@@ -147,7 +155,7 @@ class TelegramWebhookController extends Controller
     /**
      * Handle photo
      */
-    private function handlePhoto(TelegramBot $bot, int $chatId, array $photo): void
+    private function handlePhoto(TelegramBot $bot, int $chatId, array $photo, array $userData = []): void
     {
         // Send "processing" message
         $this->sendMessage($bot, $chatId, '⏳ Обрабатываю чек...');
@@ -158,13 +166,23 @@ class TelegramWebhookController extends Controller
             'sizes' => array_map(fn($p) => ['width' => $p['width'] ?? 0, 'height' => $p['height'] ?? 0, 'file_size' => $p['file_size'] ?? 0], $photo)
         ]);
 
+        // Данные для сохранения в БД
+        $checkRecord = [
+            'telegram_bot_id' => $bot->id,
+            'chat_id' => $chatId,
+            'username' => $userData['username'] ?? null,
+            'first_name' => $userData['first_name'] ?? null,
+            'file_type' => 'image',
+        ];
+
         try {
             // Try all photo sizes, starting from largest (best quality)
-            // Telegram sends multiple sizes, try them all
             $photoSizes = array_reverse($photo); // Start with largest
             
             $checkData = null;
             $processedFiles = [];
+            $lastFilePath = null;
+            $lastFileSize = null;
 
             foreach ($photoSizes as $index => $photoSize) {
                 $fileId = $photoSize['file_id'];
@@ -193,6 +211,8 @@ class TelegramWebhookController extends Controller
 
                 Log::info("Downloaded file", ['path' => $filePath, 'size' => $file['file_size'] ?? 0]);
                 $processedFiles[] = $filePath;
+                $lastFilePath = $filePath;
+                $lastFileSize = $file['file_size'] ?? null;
 
                 // Process check using OCR
                 Log::info("Starting OCR processing", ['file' => $filePath]);
@@ -200,9 +220,15 @@ class TelegramWebhookController extends Controller
                 
                 if ($checkData) {
                     Log::info("Check data successfully extracted!", ['check_data' => $checkData]);
+                    
+                    // Сохраняем успешный чек в БД
+                    $this->saveCheckToDatabase($checkRecord, $checkData, $filePath, $lastFileSize, 'success');
+                    
                     // Success! Clean up and return
                     foreach ($processedFiles as $pf) {
-                        Storage::disk('local')->delete($pf);
+                        if ($pf !== $filePath) {
+                            Storage::disk('local')->delete($pf);
+                        }
                     }
                     $this->sendCheckResult($bot, $chatId, $checkData);
                     return;
@@ -217,6 +243,9 @@ class TelegramWebhookController extends Controller
                 'files_processed' => count($processedFiles),
                 'chat_id' => $chatId
             ]);
+            
+            // Сохраняем неуспешную попытку в БД
+            $this->saveCheckToDatabase($checkRecord, null, $lastFilePath, $lastFileSize, 'failed');
             
             foreach ($processedFiles as $pf) {
                 Storage::disk('local')->delete($pf);
@@ -236,17 +265,28 @@ class TelegramWebhookController extends Controller
     /**
      * Handle document (image file)
      */
-    private function handleDocument(TelegramBot $bot, int $chatId, array $document): void
+    private function handleDocument(TelegramBot $bot, int $chatId, array $document, array $userData = []): void
     {
         $fileId = $document['file_id'];
+        $isPdf = $this->isPdfDocument($document);
 
         // Send "processing" message
         $this->sendMessage($bot, $chatId, '⏳ Обрабатываю чек...');
+
+        // Данные для сохранения в БД
+        $checkRecord = [
+            'telegram_bot_id' => $bot->id,
+            'chat_id' => $chatId,
+            'username' => $userData['username'] ?? null,
+            'first_name' => $userData['first_name'] ?? null,
+            'file_type' => $isPdf ? 'pdf' : 'image',
+        ];
 
         try {
             // Get file from Telegram
             $file = $this->getFile($bot, $fileId);
             if (!$file) {
+                $this->saveCheckToDatabase($checkRecord, null, null, null, 'failed');
                 $this->sendMessage($bot, $chatId, '❌ Ошибка при получении файла.');
                 return;
             }
@@ -254,24 +294,26 @@ class TelegramWebhookController extends Controller
             // Download file
             $filePath = $this->downloadFile($bot, $file['file_path']);
             if (!$filePath) {
+                $this->saveCheckToDatabase($checkRecord, null, null, null, 'failed');
                 $this->sendMessage($bot, $chatId, '❌ Ошибка при загрузке файла.');
                 return;
             }
 
+            $fileSize = $file['file_size'] ?? null;
+
             // Process check using OCR
-            $isPdf = $this->isPdfDocument($document);
             Log::info("Processing document with OCR", ['is_pdf' => $isPdf, 'file' => $filePath]);
             $checkData = $this->processCheckWithOCR($filePath, $isPdf);
 
             // Send result
             if ($checkData) {
+                $this->saveCheckToDatabase($checkRecord, $checkData, $filePath, $fileSize, 'success');
                 $this->sendCheckResult($bot, $chatId, $checkData);
             } else {
+                $this->saveCheckToDatabase($checkRecord, null, $filePath, $fileSize, 'failed');
                 $this->sendMessage($bot, $chatId, '❌ Не удалось распознать текст на чеке. Убедитесь, что фото четкое и текст хорошо виден. Попробуйте отправить другое фото или PDF.');
+                Storage::disk('local')->delete($filePath);
             }
-
-            // Clean up
-            Storage::disk('local')->delete($filePath);
         } catch (\Exception $e) {
             Log::error('Error processing document: ' . $e->getMessage());
             $this->sendMessage($bot, $chatId, '❌ Произошла ошибка при обработке чека.');
@@ -295,6 +337,58 @@ class TelegramWebhookController extends Controller
         $mimeType = $document['mime_type'] ?? '';
         $fileName = $document['file_name'] ?? '';
         return $mimeType === 'application/pdf' || str_ends_with(strtolower($fileName), '.pdf');
+    }
+
+    /**
+     * Сохранить чек в базу данных для статистики
+     */
+    private function saveCheckToDatabase(array $baseData, ?array $checkData, ?string $filePath, ?int $fileSize, string $status): void
+    {
+        try {
+            $amountFound = isset($checkData['amount']) && $checkData['amount'] !== null;
+            $dateFound = isset($checkData['date']) && $checkData['date'] !== null;
+            
+            // Определяем финальный статус
+            if ($status === 'success') {
+                if ($amountFound && $dateFound) {
+                    $finalStatus = 'success';
+                } elseif ($amountFound || $dateFound) {
+                    $finalStatus = 'partial';
+                } else {
+                    $finalStatus = 'failed';
+                }
+            } else {
+                $finalStatus = 'failed';
+            }
+            
+            Check::create([
+                'telegram_bot_id' => $baseData['telegram_bot_id'],
+                'chat_id' => $baseData['chat_id'],
+                'username' => $baseData['username'],
+                'first_name' => $baseData['first_name'],
+                'file_path' => $filePath,
+                'file_type' => $baseData['file_type'] ?? 'image',
+                'file_size' => $fileSize,
+                'amount' => $checkData['amount'] ?? null,
+                'currency' => $checkData['currency'] ?? 'RUB',
+                'check_date' => isset($checkData['date']) ? $checkData['date'] : null,
+                'ocr_method' => $checkData['ocr_method'] ?? null,
+                'raw_text' => isset($checkData['raw_text']) ? substr($checkData['raw_text'], 0, 5000) : null,
+                'text_length' => $checkData['text_length'] ?? null,
+                'readable_ratio' => $checkData['readable_ratio'] ?? null,
+                'status' => $finalStatus,
+                'amount_found' => $amountFound,
+                'date_found' => $dateFound,
+            ]);
+            
+            Log::info('Check saved to database', [
+                'status' => $finalStatus,
+                'amount_found' => $amountFound,
+                'date_found' => $dateFound,
+            ]);
+        } catch (\Exception $e) {
+            Log::error('Failed to save check to database: ' . $e->getMessage());
+        }
     }
 
     /**
@@ -368,6 +462,10 @@ class TelegramWebhookController extends Controller
             ];
 
             $extractedText = null;
+            $usedOcrMethod = null;
+            $ocrTextLength = null;
+            $ocrReadableRatio = null;
+            
             foreach ($ocrMethods as $method) {
                 try {
                     Log::info("Trying OCR method: {$method}", ['file' => $fullPath]);
@@ -392,10 +490,16 @@ class TelegramWebhookController extends Controller
                         // For receipts we expect at least 100 chars and 30% readable
                         if ($textLen >= 100 && $readableRatio >= 0.30) {
                             $extractedText = $text;
+                            $usedOcrMethod = $method;
+                            $ocrTextLength = $textLen;
+                            $ocrReadableRatio = $readableRatio;
                             break;
                         } elseif ($textLen >= 50 && $readableRatio >= 0.40) {
                             // Shorter but more readable is also OK
                             $extractedText = $text;
+                            $usedOcrMethod = $method;
+                            $ocrTextLength = $textLen;
+                            $ocrReadableRatio = $readableRatio;
                             break;
                         } else {
                             Log::warning("OCR text quality too low, trying next method", [
@@ -428,6 +532,11 @@ class TelegramWebhookController extends Controller
             $checkData = $this->parsePaymentAmount($extractedText);
             
             if ($checkData) {
+                // Добавляем информацию об OCR методе для статистики
+                $checkData['ocr_method'] = $usedOcrMethod;
+                $checkData['text_length'] = $ocrTextLength;
+                $checkData['readable_ratio'] = $ocrReadableRatio;
+                
                 Log::info('Payment amount parsed successfully', ['check_data' => $checkData]);
                 return $checkData;
             }

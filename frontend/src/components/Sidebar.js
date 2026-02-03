@@ -6,6 +6,7 @@ function Sidebar({ isOpen, onToggle, user, onLogout }) {
 
   const menuItems = [
     { id: 'dashboard', label: 'Главная', icon: '🏠', path: '/' },
+    { id: 'checks', label: 'Чеки', icon: '🧾', path: '/checks' },
     { id: 'bot', label: 'Бот', icon: '🤖', path: '/bot' },
   ];
 
