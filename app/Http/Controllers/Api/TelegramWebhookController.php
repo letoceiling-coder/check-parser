@@ -1182,23 +1182,33 @@ PYTHON;
             $fileContents = file_get_contents($filePath);
             $base64Image = base64_encode($fileContents);
             
-            // Determine if it's an API key (starts with AQVN) or IAM token (starts with t1.)
-            // API keys use "Api-Key" header, IAM tokens use "Bearer" header
+            // Determine if it's an API key (starts with AQVN or AQAA) or IAM token (starts with t1.)
+            // For Yandex Vision API, API keys should use "Api-Key" header, IAM tokens use "Bearer" header
             $isApiKey = str_starts_with($apiKey, 'AQVN') || str_starts_with($apiKey, 'AQAA');
-            $authHeader = $isApiKey ? 'Api-Key ' . $apiKey : 'Bearer ' . $apiKey;
+            
+            // Build headers - try both formats for API key if needed
+            $headers = [
+                'Content-Type' => 'application/json'
+            ];
+            
+            if ($isApiKey) {
+                // API key format - try Api-Key header first
+                $headers['Authorization'] = 'Api-Key ' . $apiKey;
+            } else {
+                // IAM token format
+                $headers['Authorization'] = 'Bearer ' . $apiKey;
+            }
             
             Log::info('Calling Yandex Vision API', [
                 'file' => $filePath,
                 'file_size' => strlen($fileContents),
                 'folder_id' => $folderId,
-                'auth_type' => $isApiKey ? 'API-Key' : 'IAM-Token'
+                'auth_type' => $isApiKey ? 'API-Key' : 'IAM-Token',
+                'api_key_preview' => substr($apiKey, 0, 10) . '...'
             ]);
             
             $response = Http::timeout(30)
-                ->withHeaders([
-                    'Authorization' => $authHeader,
-                    'Content-Type' => 'application/json'
-                ])
+                ->withHeaders($headers)
                 ->post('https://vision.api.cloud.yandex.net/vision/v1/batchAnalyze', [
                     'folderId' => $folderId,
                     'analyzeSpecs' => [
@@ -1256,6 +1266,64 @@ PYTHON;
                 $errorBody = $response->json();
                 $errorMessage = $errorBody['message'] ?? 'Unknown error';
                 $errorCode = $errorBody['code'] ?? $response->status();
+                
+                if ($response->status() === 401 && $isApiKey) {
+                    // Try with Bearer format for API key (some APIs accept both)
+                    Log::warning('Yandex Vision API: Invalid token (401) with Api-Key format, trying Bearer format', [
+                        'error_code' => $errorCode,
+                        'error_message' => $errorMessage
+                    ]);
+                    
+                    $response = Http::timeout(30)
+                        ->withHeaders([
+                            'Authorization' => 'Bearer ' . $apiKey,
+                            'Content-Type' => 'application/json'
+                        ])
+                        ->post('https://vision.api.cloud.yandex.net/vision/v1/batchAnalyze', [
+                            'folderId' => $folderId,
+                            'analyzeSpecs' => [
+                                [
+                                    'content' => $base64Image,
+                                    'features' => [
+                                        ['type' => 'TEXT_DETECTION', 'textDetectionConfig' => ['languageCodes' => ['ru', 'en']]]
+                                    ]
+                                ]
+                            ]
+                        ]);
+                    
+                    if ($response->successful()) {
+                        $data = $response->json();
+                        $text = '';
+                        
+                        if (isset($data['results'][0]['results'][0]['textDetection']['pages'][0]['blocks'])) {
+                            foreach ($data['results'][0]['results'][0]['textDetection']['pages'][0]['blocks'] as $block) {
+                                foreach ($block['lines'] ?? [] as $line) {
+                                    foreach ($line['words'] ?? [] as $word) {
+                                        $text .= ($word['text'] ?? '') . ' ';
+                                    }
+                                    $text .= "\n";
+                                }
+                            }
+                        } elseif (isset($data['results'][0]['textDetection']['pages'][0]['blocks'])) {
+                            foreach ($data['results'][0]['textDetection']['pages'][0]['blocks'] as $block) {
+                                foreach ($block['lines'] ?? [] as $line) {
+                                    foreach ($line['words'] ?? [] as $word) {
+                                        $text .= ($word['text'] ?? '') . ' ';
+                                    }
+                                    $text .= "\n";
+                                }
+                            }
+                        }
+                        
+                        if (!empty(trim($text))) {
+                            Log::info('Yandex Vision extracted text (using Bearer format)', [
+                                'text_length' => strlen($text),
+                                'text_preview' => substr($text, 0, 200)
+                            ]);
+                            return trim($text);
+                        }
+                    }
+                }
                 
                 if ($response->status() === 403) {
                     Log::error('Yandex Vision API: Permission denied (403)', [
@@ -1576,15 +1644,16 @@ PYTHON;
             $amount = null;
             
             // Priority patterns - these are most reliable
+            // Use \s* to match any whitespace including newlines between keyword and amount
             $priorityPatterns = [
-                // "Итого: 550 ₽" or "Итого 550 ₽" or "Итого 550 P" or "Итого 10 000 ₽"
-                '/итого[:\s]+(\d{1,3}(?:\s+\d{3})*(?:[\.,]\d{2})?)\s*[₽рубрpе]/ui',
-                // "Сумма: 550 ₽" or "Сумма 550 ₽" or "Сумма 10 000 ₽"
-                '/сумма[:\s]+(\d{1,3}(?:\s+\d{3})*(?:[\.,]\d{2})?)\s*[₽рубрpе]/ui',
+                // "Итого: 550 ₽" or "Итого 550 ₽" or "Итого\n550 е" or "Итого 10 000 ₽"
+                '/итого[:\s]*(\d{1,3}(?:\s+\d{3})*(?:[\.,]\d{2})?)\s*[₽рубрpе]/ui',
+                // "Сумма: 550 ₽" or "Сумма 550 ₽" or "Сумма\n550 е" or "Сумма 10 000 ₽"
+                '/сумма[:\s]*(\d{1,3}(?:\s+\d{3})*(?:[\.,]\d{2})?)\s*[₽рубрpе]/ui',
                 // "К оплате: 550 ₽"
-                '/к\s+оплате[:\s]+(\d{1,3}(?:\s+\d{3})*(?:[\.,]\d{2})?)\s*[₽рубрpе]/ui',
+                '/к\s+оплате[:\s]*(\d{1,3}(?:\s+\d{3})*(?:[\.,]\d{2})?)\s*[₽рубрpе]/ui',
                 // "Всего: 550 ₽"
-                '/всего[:\s]+(\d{1,3}(?:\s+\d{3})*(?:[\.,]\d{2})?)\s*[₽рубрpе]/ui',
+                '/всего[:\s]*(\d{1,3}(?:\s+\d{3})*(?:[\.,]\d{2})?)\s*[₽рубрpе]/ui',
             ];
             
             // Try priority patterns first
@@ -1615,10 +1684,14 @@ PYTHON;
             // If priority patterns didn't work, try fallback patterns
             if ($amount === null) {
                 $fallbackPatterns = [
-                    // Numbers with currency symbol (₽, руб, P, р, е)
+                    // Numbers with currency symbol (₽, руб, P, р, е) - more flexible spacing
                     '/(\d{1,3}(?:\s+\d{3})*(?:[\.,]\d{2})?)\s*[₽рубрpе]/ui',
+                    // "550 е" pattern (common OCR error - "е" instead of "₽")
+                    '/(\d{1,3}(?:\s+\d{3})*(?:[\.,]\d{2})?)\s*е\b/ui',
                     // "550 P" pattern (common in receipts)
                     '/(\d{1,3}(?:\s+\d{3})*(?:[\.,]\d{2})?)\s+p\b/ui',
+                    // Just numbers that look like amounts (3-6 digits, not dates)
+                    '/(\d{3,6}(?:[\.,]\d{2})?)(?!\s*[\.\/]\d)/u', // Not followed by date pattern
                 ];
                 
                 foreach ($fallbackPatterns as $index => $pattern) {
@@ -1632,21 +1705,31 @@ PYTHON;
                             
                             // Validate - should be reasonable and not look like a date
                             if ($candidateAmount >= 1 && $candidateAmount <= 1000000) {
-                                // Exclude if it looks like a date (e.g., 02.02, 03.02)
-                                if (!preg_match('/^\d{1,2}\.?\d{1,2}$/', $match[1])) {
-                                    $candidates[] = $candidateAmount;
+                                // Exclude if it looks like a date (e.g., 02.02, 03.02, 03022016)
+                                $rawMatch = $match[1];
+                                if (!preg_match('/^\d{1,2}\.?\d{1,2}$/', $rawMatch) && 
+                                    !preg_match('/^\d{8}$/', $rawMatch) && // Not 8-digit date
+                                    $candidateAmount >= 10) { // Minimum reasonable amount
+                                    $candidates[] = [
+                                        'amount' => $candidateAmount,
+                                        'raw' => $rawMatch,
+                                        'match' => $match[0]
+                                    ];
                                 }
                             }
                         }
                         
                         if (!empty($candidates)) {
                             // Pick the largest amount (most likely the total)
-                            $amount = max($candidates);
+                            usort($candidates, function($a, $b) {
+                                return $b['amount'] <=> $a['amount'];
+                            });
+                            $amount = $candidates[0]['amount'];
                             Log::info('Amount found using fallback pattern', [
                                 'pattern_index' => $index,
                                 'pattern' => $pattern,
                                 'amount' => $amount,
-                                'candidates' => $candidates
+                                'top_candidates' => array_slice($candidates, 0, 3)
                             ]);
                             break;
                         }
