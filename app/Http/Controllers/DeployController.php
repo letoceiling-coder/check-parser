@@ -23,9 +23,17 @@ class DeployController extends Controller
             $token = substr($token, 7);
         }
         
-        $expectedToken = env('DEPLOY_TOKEN');
+        // Read token from config (which reads from .env)
+        // Clear config cache first to ensure fresh value
+        Artisan::call('config:clear');
+        $expectedToken = config('app.deploy_token') ?? env('DEPLOY_TOKEN');
         
         if (!$expectedToken || $token !== $expectedToken) {
+            Log::warning('Deploy token mismatch', [
+                'received' => substr($token ?? '', 0, 10) . '...',
+                'expected' => substr($expectedToken ?? '', 0, 10) . '...',
+            ]);
+            
             return response()->json([
                 'success' => false,
                 'error' => 'Unauthorized: Invalid token'
