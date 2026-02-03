@@ -359,11 +359,12 @@ class TelegramWebhookController extends Controller
             // Try multiple OCR methods
             // Tesseract first (if installed) - local, fast, no API limits
             // Then remote Tesseract API, then external APIs as fallback
+            // OCR methods - try multiple, use first successful result with enough text
             $ocrMethods = [
-                'extractTextWithTesseract',      // Local - fastest, no limits, best for documents
+                'extractTextWithTesseract',       // Local - fastest, no limits
+                'extractTextWithOCRspace',        // OCR.space - good for Russian text
                 'extractTextWithRemoteTesseract', // Remote VPS Tesseract API
-                'extractTextWithOCRspace',       // Free but may timeout
-                'extractTextWithGoogleVision',  // Paid but reliable
+                'extractTextWithGoogleVision',    // Paid but reliable
             ];
 
             $extractedText = null;
@@ -372,12 +373,37 @@ class TelegramWebhookController extends Controller
                     Log::info("Trying OCR method: {$method}", ['file' => $fullPath]);
                     $text = $this->$method($fullPath);
                     if ($text && !empty(trim($text))) {
+                        // Check text quality - should have reasonable amount of readable characters
+                        $cleanText = trim($text);
+                        $textLen = mb_strlen($cleanText, 'UTF-8');
+                        
+                        // Count readable characters (Cyrillic, Latin, digits)
+                        $readableChars = preg_match_all('/[а-яА-ЯёЁa-zA-Z0-9]/u', $cleanText);
+                        $readableRatio = $textLen > 0 ? $readableChars / $textLen : 0;
+                        
                         Log::info("Text extracted using {$method}", [
-                            'text_length' => strlen($text),
-                            'text_preview' => substr($text, 0, 300)
+                            'text_length' => $textLen,
+                            'readable_chars' => $readableChars,
+                            'readable_ratio' => round($readableRatio, 2),
+                            'text_preview' => substr($cleanText, 0, 300)
                         ]);
-                        $extractedText = $text;
-                        break;
+                        
+                        // Accept if: enough text AND reasonable readable ratio
+                        // For receipts we expect at least 100 chars and 30% readable
+                        if ($textLen >= 100 && $readableRatio >= 0.30) {
+                            $extractedText = $text;
+                            break;
+                        } elseif ($textLen >= 50 && $readableRatio >= 0.40) {
+                            // Shorter but more readable is also OK
+                            $extractedText = $text;
+                            break;
+                        } else {
+                            Log::warning("OCR text quality too low, trying next method", [
+                                'method' => $method,
+                                'text_length' => $textLen,
+                                'readable_ratio' => round($readableRatio, 2)
+                            ]);
+                        }
                     } else {
                         Log::debug("OCR method {$method} returned empty text");
                     }
