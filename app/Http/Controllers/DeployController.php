@@ -97,9 +97,9 @@ class DeployController extends Controller
             
             // Clean untracked files (but keep .env, storage, vendor, node_modules)
             // Use git clean with exclusions
-            // Clean untracked files (except important ones)
-            // Note: git clean doesn't support multiple -e flags, so we use a different approach
-            $gitClean = Process::path(base_path())->run('git clean -fd');
+            // Clean untracked files (but keep React build files and important directories)
+            // Note: React files should be in git, but we exclude them just in case
+            $gitClean = Process::path(base_path())->run('git clean -fd -e public/static -e public/index.html -e public/asset-manifest.json -e public/manifest.json');
             if ($gitClean->successful()) {
                 $cleanOutput = trim($gitClean->output());
                 if (!empty($cleanOutput)) {
