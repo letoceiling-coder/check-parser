@@ -194,7 +194,7 @@ class TelegramWebhookController extends Controller
             }
 
             // If we get here, all attempts failed
-            Log::error("All QR code extraction attempts failed", [
+            Log::error("All OCR extraction attempts failed", [
                 'photo_sizes_tried' => count($photoSizes),
                 'files_processed' => count($processedFiles),
                 'chat_id' => $chatId
@@ -204,7 +204,7 @@ class TelegramWebhookController extends Controller
                 Storage::disk('local')->delete($pf);
             }
             
-            $this->sendMessage($bot, $chatId, '❌ Не удалось распознать QR код на чеке. Убедитесь, что фото четкое и QR код виден. Пришлите другое фото.');
+            $this->sendMessage($bot, $chatId, '❌ Не удалось распознать текст на чеке. Убедитесь, что фото четкое и текст хорошо виден. Попробуйте отправить другое фото или PDF.');
         } catch (\Exception $e) {
             Log::error('Error processing photo: ' . $e->getMessage(), [
                 'trace' => $e->getTraceAsString(),
@@ -241,13 +241,15 @@ class TelegramWebhookController extends Controller
             }
 
             // Process check using OCR
-            $checkData = $this->processCheckWithOCR($filePath, $this->isPdfDocument($document));
+            $isPdf = $this->isPdfDocument($document);
+            Log::info("Processing document with OCR", ['is_pdf' => $isPdf, 'file' => $filePath]);
+            $checkData = $this->processCheckWithOCR($filePath, $isPdf);
 
             // Send result
             if ($checkData) {
                 $this->sendCheckResult($bot, $chatId, $checkData);
             } else {
-                $this->sendMessage($bot, $chatId, '❌ Не удалось распознать текст на чеке. Убедитесь, что фото четкое и текст хорошо виден.');
+                $this->sendMessage($bot, $chatId, '❌ Не удалось распознать текст на чеке. Убедитесь, что фото четкое и текст хорошо виден. Попробуйте отправить другое фото или PDF.');
             }
 
             // Clean up
@@ -347,21 +349,32 @@ class TelegramWebhookController extends Controller
             $extractedText = null;
             foreach ($ocrMethods as $method) {
                 try {
-                    Log::info("Trying OCR method: {$method}");
+                    Log::info("Trying OCR method: {$method}", ['file' => $fullPath]);
                     $text = $this->$method($fullPath);
                     if ($text && !empty(trim($text))) {
-                        Log::info("Text extracted using {$method}", ['text_length' => strlen($text)]);
+                        Log::info("Text extracted using {$method}", [
+                            'text_length' => strlen($text),
+                            'text_preview' => substr($text, 0, 300)
+                        ]);
                         $extractedText = $text;
                         break;
+                    } else {
+                        Log::debug("OCR method {$method} returned empty text");
                     }
                 } catch (\Exception $e) {
-                    Log::debug("OCR method {$method} failed: " . $e->getMessage());
+                    Log::warning("OCR method {$method} failed: " . $e->getMessage(), [
+                        'trace' => substr($e->getTraceAsString(), 0, 500)
+                    ]);
                     continue;
                 }
             }
 
             if (!$extractedText) {
-                Log::warning('All OCR methods failed');
+                Log::error('All OCR methods failed', [
+                    'file' => $fullPath,
+                    'file_exists' => file_exists($fullPath),
+                    'file_size' => file_exists($fullPath) ? filesize($fullPath) : 0
+                ]);
                 return null;
             }
 
@@ -1191,6 +1204,8 @@ PYTHON;
         try {
             $apiKey = env('OCR_SPACE_API_KEY', 'helloworld'); // Free tier key
             
+            Log::info('Calling OCR.space API', ['file' => $filePath, 'file_size' => filesize($filePath)]);
+            
             $response = Http::timeout(60)
                 ->attach('file', file_get_contents($filePath), basename($filePath))
                 ->post('https://api.ocr.space/parse/image', [
@@ -1200,17 +1215,39 @@ PYTHON;
                     'detectOrientation' => true,
                 ]);
 
+            Log::info('OCR.space API response', [
+                'status' => $response->status(),
+                'successful' => $response->successful(),
+                'body_preview' => substr($response->body(), 0, 500)
+            ]);
+
             if ($response->successful()) {
                 $data = $response->json();
                 
+                Log::info('OCR.space response data', ['has_parsed_results' => isset($data['ParsedResults'])]);
+                
                 if (isset($data['ParsedResults'][0]['ParsedText'])) {
-                    return trim($data['ParsedResults'][0]['ParsedText']);
+                    $text = trim($data['ParsedResults'][0]['ParsedText']);
+                    Log::info('OCR.space extracted text', ['text_length' => strlen($text), 'text_preview' => substr($text, 0, 200)]);
+                    return $text;
                 }
+                
+                // Check for errors
+                if (isset($data['ErrorMessage'])) {
+                    Log::warning('OCR.space error', ['error' => $data['ErrorMessage']]);
+                }
+            } else {
+                Log::warning('OCR.space API request failed', [
+                    'status' => $response->status(),
+                    'body' => substr($response->body(), 0, 500)
+                ]);
             }
 
             return null;
         } catch (\Exception $e) {
-            Log::debug('OCR.space API failed: ' . $e->getMessage());
+            Log::error('OCR.space API exception: ' . $e->getMessage(), [
+                'trace' => $e->getTraceAsString()
+            ]);
             return null;
         }
     }
@@ -1295,40 +1332,61 @@ PYTHON;
     private function parsePaymentAmount(string $text): ?array
     {
         try {
-            Log::info('Parsing payment amount from text', ['text_length' => strlen($text)]);
+            Log::info('Parsing payment amount from text', [
+                'text_length' => strlen($text),
+                'text_preview' => substr($text, 0, 500)
+            ]);
+            
+            // Store original text for debugging
+            $originalText = $text;
             
             // Normalize text - remove extra spaces and newlines
             $text = preg_replace('/\s+/', ' ', $text);
-            $text = mb_strtolower($text, 'UTF-8');
+            $textLower = mb_strtolower($text, 'UTF-8');
             
             // Patterns to find amount in Russian receipts
             $patterns = [
-                // "Итого: 550 ₽" or "Итого 550 ₽"
-                '/итого[:\s]+(\d+[\.,]?\d*)\s*[₽руб]/ui',
-                // "Сумма: 550 ₽" or "Сумма 550 ₽"
-                '/сумма[:\s]+(\d+[\.,]?\d*)\s*[₽руб]/ui',
+                // "Итого: 550 ₽" or "Итого 550 ₽" or "Итого 550 P"
+                '/итого[:\s]+(\d+[\.,]?\d*)\s*[₽рубрp]/ui',
+                // "Сумма: 550 ₽" or "Сумма 550 ₽" or "Сумма 550 P"
+                '/сумма[:\s]+(\d+[\.,]?\d*)\s*[₽рубрp]/ui',
                 // "К оплате: 550 ₽"
-                '/к\s+оплате[:\s]+(\d+[\.,]?\d*)\s*[₽руб]/ui',
+                '/к\s+оплате[:\s]+(\d+[\.,]?\d*)\s*[₽рубрp]/ui',
                 // "Всего: 550 ₽"
-                '/всего[:\s]+(\d+[\.,]?\d*)\s*[₽руб]/ui',
-                // Just find numbers with currency symbol
-                '/(\d+[\.,]?\d*)\s*[₽руб]/ui',
-                // Find large numbers (likely amounts)
-                '/(\d{3,}[\.,]?\d*)/u',
+                '/всего[:\s]+(\d+[\.,]?\d*)\s*[₽рубрp]/ui',
+                // "Итого 550 P" (with space before P)
+                '/итого\s+(\d+[\.,]?\d*)\s*[pр]/ui',
+                // Just find numbers with currency symbol (₽, руб, P, р)
+                '/(\d+[\.,]?\d*)\s*[₽рубрp]/ui',
+                // Find "550 P" pattern (common in receipts)
+                '/(\d+[\.,]?\d*)\s+p\b/ui',
+                // Find large numbers (likely amounts) - but not too large
+                '/(\d{2,5}[\.,]?\d*)/u',
             ];
 
             $amount = null;
             $date = null;
 
-            foreach ($patterns as $pattern) {
-                if (preg_match($pattern, $text, $matches)) {
-                    $amountStr = str_replace(',', '.', $matches[1]);
-                    $amount = (float) $amountStr;
-                    
-                    // Validate amount (should be reasonable)
-                    if ($amount > 0 && $amount < 1000000) {
-                        Log::info('Amount found using pattern', ['pattern' => $pattern, 'amount' => $amount]);
-                        break;
+            foreach ($patterns as $index => $pattern) {
+                // Try both original and lowercase text
+                $testTexts = [$textLower, $text];
+                foreach ($testTexts as $testText) {
+                    if (preg_match($pattern, $testText, $matches)) {
+                        $amountStr = str_replace(',', '.', $matches[1]);
+                        $amount = (float) $amountStr;
+                        
+                        // Validate amount (should be reasonable)
+                        if ($amount > 0 && $amount < 1000000) {
+                            Log::info('Amount found using pattern', [
+                                'pattern_index' => $index,
+                                'pattern' => $pattern,
+                                'amount' => $amount,
+                                'match' => $matches[0]
+                            ]);
+                            break 2; // Break from both loops
+                        } else {
+                            Log::debug('Amount found but invalid', ['amount' => $amount]);
+                        }
                     }
                 }
             }
