@@ -374,11 +374,29 @@ class TelegramWebhookController extends Controller
                 $finalStatus = 'failed';
             }
             
+            // Очистка текста от проблемных символов для MySQL
+            $rawText = null;
+            if (isset($checkData['raw_text'])) {
+                $rawText = $checkData['raw_text'];
+                // Убираем невалидные UTF-8 символы
+                $rawText = mb_convert_encoding($rawText, 'UTF-8', 'UTF-8');
+                // Убираем null bytes и другие проблемные символы
+                $rawText = preg_replace('/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/u', '', $rawText);
+                $rawText = substr($rawText, 0, 5000);
+            }
+            
+            // Очистка first_name
+            $firstName = $baseData['first_name'] ?? null;
+            if ($firstName) {
+                $firstName = mb_convert_encoding($firstName, 'UTF-8', 'UTF-8');
+                $firstName = preg_replace('/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/u', '', $firstName);
+            }
+            
             Check::create([
                 'telegram_bot_id' => $baseData['telegram_bot_id'],
                 'chat_id' => $baseData['chat_id'],
                 'username' => $baseData['username'],
-                'first_name' => $baseData['first_name'],
+                'first_name' => $firstName,
                 'file_path' => $filePath,
                 'file_type' => $baseData['file_type'] ?? 'image',
                 'file_size' => $fileSize,
@@ -386,7 +404,7 @@ class TelegramWebhookController extends Controller
                 'currency' => $checkData['currency'] ?? 'RUB',
                 'check_date' => isset($checkData['date']) ? $checkData['date'] : null,
                 'ocr_method' => $checkData['ocr_method'] ?? null,
-                'raw_text' => isset($checkData['raw_text']) ? substr($checkData['raw_text'], 0, 5000) : null,
+                'raw_text' => $rawText,
                 'text_length' => $checkData['text_length'] ?? null,
                 'readable_ratio' => $checkData['readable_ratio'] ?? null,
                 'status' => $finalStatus,
