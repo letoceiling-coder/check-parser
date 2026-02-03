@@ -1743,13 +1743,17 @@ PYTHON;
                 'оплата', 'платёж', 'платеж'
             ];
             $badContextWords = [
-                'инн', 'бик', 'кпп', 'огрн', 'р/с', 'счет', 'счёт', 'карта',
-                'идентификатор', 'операц', 'сбп', 'телефон', 'получател', 'отправител',
-                'номер', 'код авторизации', 'авторизации', 'номер карты',
+                'инн', 'бик', 'кпп', 'огрн', 'р/с', 'счет', 'счёт', 
+                'идентификатор', 'сбп', 'телефон',
+                'код авторизации', 'авторизации', 'квитанция №', 'квитанции',
             ];
+            
+            // Normalize spaces in text for better number matching (convert all whitespace to single space)
+            $textNormalized = preg_replace('/[\s\x{00A0}\x{2000}-\x{200B}]+/u', ' ', $text);
 
             // Find all numeric candidates (with optional thousands separators and decimals)
-            if (preg_match_all('/\d{1,3}(?:\s+\d{3})*(?:[.,]\d{2})?|\d{3,12}/u', $text, $numMatches, PREG_OFFSET_CAPTURE)) {
+            // Pattern matches: "10 000", "10000", "1 234 567", "123,45", "123.45"
+            if (preg_match_all('/\d{1,3}(?:[\s\x{00A0}]\d{3})+(?:[.,]\d{2})?|\d+(?:[.,]\d{2})?/u', $textNormalized, $numMatches, PREG_OFFSET_CAPTURE)) {
                 $candidates = [];
 
                 foreach ($numMatches[0] as [$rawNum, $pos]) {
@@ -1764,15 +1768,20 @@ PYTHON;
                     }
                     
                     // Skip numbers that are part of time format (HH:MM)
-                    // Check if there's a colon immediately after or before the number
-                    $charAfter = substr($text, $pos + strlen($rawNumTrim), 1);
-                    $charBefore = $pos > 0 ? substr($text, $pos - 1, 1) : '';
+                    $charAfter = substr($textNormalized, $pos + strlen($rawNumTrim), 1);
+                    $charBefore = $pos > 0 ? substr($textNormalized, $pos - 1, 1) : '';
                     if ($charAfter === ':' || $charBefore === ':') {
                         continue;
                     }
+                    
+                    // Skip numbers that look like part of receipt/transaction numbers (sequences of digits with dashes)
+                    $contextAround = substr($textNormalized, max(0, $pos - 10), strlen($rawNumTrim) + 20);
+                    if (preg_match('/\d+-\d+-\d+/', $contextAround)) {
+                        continue;
+                    }
 
-                    // Normalize number
-                    $normalized = preg_replace('/\s+/', '', $rawNumTrim);
+                    // Normalize number - remove spaces and convert comma to dot
+                    $normalized = preg_replace('/[\s\x{00A0}]+/u', '', $rawNumTrim);
                     $normalized = str_replace(',', '.', $normalized);
 
                     if (!is_numeric($normalized)) {
@@ -1786,8 +1795,8 @@ PYTHON;
 
                     // Context window around number
                     $winStart = max(0, $pos - 80);
-                    $winLen = min(strlen($text) - $winStart, 160);
-                    $context = mb_strtolower(substr($text, $winStart, $winLen), 'UTF-8');
+                    $winLen = min(strlen($textNormalized) - $winStart, 160);
+                    $context = mb_strtolower(substr($textNormalized, $winStart, $winLen), 'UTF-8');
 
                     // Reject if near known non-amount fields
                     $isBad = false;
@@ -1802,12 +1811,12 @@ PYTHON;
                     }
 
                     // Currency proximity - check if ₽/Р immediately follows the number (within 3 chars)
-                    $afterClose = substr($text, $pos + strlen($rawNumTrim), 5);
+                    $afterClose = substr($textNormalized, $pos + strlen($rawNumTrim), 5);
                     $hasCurrencyClose = (bool) preg_match('/^\s*[₽РрPp]/ui', $afterClose);
                     
                     // Also check broader context for currency
-                    $after = substr($text, $pos, 30);
-                    $before = substr($text, max(0, $pos - 30), 30);
+                    $after = substr($textNormalized, $pos, 30);
+                    $before = substr($textNormalized, max(0, $pos - 30), 30);
                     $hasCurrencyBroad = (bool) preg_match('/(₽|руб)/ui', $after) || (bool) preg_match('/(₽|руб)/ui', $before);
 
                     // Keyword proximity scoring
@@ -1870,15 +1879,29 @@ PYTHON;
                     });
 
                     $best = $candidates[0];
-                    $amount = $best['amount'];
-
+                    
+                    // Minimum score threshold - if too low, don't trust the result
+                    // Score of 10+ means we found keywords like "итого" or "сумма" near the number
+                    $minScoreThreshold = 8;
+                    
                     Log::info('Amount selected by scoring', [
-                        'amount' => $amount,
+                        'amount' => $best['amount'],
                         'raw' => $best['raw'],
                         'score' => $best['score'],
                         'has_currency' => $best['has_currency'],
+                        'min_threshold' => $minScoreThreshold,
                         'top3' => array_slice($candidates, 0, 3),
                     ]);
+                    
+                    if ($best['score'] >= $minScoreThreshold) {
+                        $amount = $best['amount'];
+                    } else {
+                        Log::warning('Amount score too low, result unreliable', [
+                            'best_score' => $best['score'],
+                            'threshold' => $minScoreThreshold,
+                            'best_amount' => $best['amount']
+                        ]);
+                    }
                 }
             }
 
