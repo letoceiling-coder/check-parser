@@ -1745,6 +1745,14 @@ PYTHON;
                     if (preg_match('/^\d{8}$/u', $rawNumTrim)) {
                         continue;
                     }
+                    
+                    // Skip numbers that are part of time format (HH:MM)
+                    // Check if there's a colon immediately after or before the number
+                    $charAfter = substr($text, $pos + strlen($rawNumTrim), 1);
+                    $charBefore = $pos > 0 ? substr($text, $pos - 1, 1) : '';
+                    if ($charAfter === ':' || $charBefore === ':') {
+                        continue;
+                    }
 
                     // Normalize number
                     $normalized = preg_replace('/\s+/', '', $rawNumTrim);
@@ -1776,27 +1784,53 @@ PYTHON;
                         continue;
                     }
 
-                    // Currency proximity (₽/руб/р/p/P/е). OCR often returns "е" for ₽, "P" for ₽ in Sberbank docs.
+                    // Currency proximity - check if ₽/Р immediately follows the number (within 3 chars)
+                    $afterClose = substr($text, $pos + strlen($rawNumTrim), 5);
+                    $hasCurrencyClose = (bool) preg_match('/^\s*[₽РрPp]/ui', $afterClose);
+                    
+                    // Also check broader context for currency
                     $after = substr($text, $pos, 30);
                     $before = substr($text, max(0, $pos - 30), 30);
-                    $hasCurrency = (bool) preg_match('/(₽|руб|р\b|p\b|P\b|е\b)/ui', $after) || (bool) preg_match('/(₽|руб|р\b|p\b|P\b|е\b)/ui', $before);
+                    $hasCurrencyBroad = (bool) preg_match('/(₽|руб)/ui', $after) || (bool) preg_match('/(₽|руб)/ui', $before);
 
                     // Keyword proximity scoring
                     $score = 0;
-                    if ($hasCurrency) {
+                    
+                    // Strong bonus for currency immediately after number
+                    if ($hasCurrencyClose) {
+                        $score += 10;
+                    } elseif ($hasCurrencyBroad) {
                         $score += 3;
+                    }
+                    
+                    // Strong bonus for key receipt keywords
+                    if (str_contains($context, 'итого')) {
+                        $score += 15;
+                    }
+                    if (str_contains($context, 'сумма') && !str_contains($context, 'комисси')) {
+                        $score += 12;
                     }
                     foreach ($keywords as $kw) {
                         if (str_contains($context, $kw)) {
-                            $score += 5;
+                            $score += 3;
                         }
                     }
 
-                    // Prefer “round-ish” receipt totals (no 10+ digits, not a bank account prefix)
-                    if ($val >= 10) {
+                    // Prefer larger reasonable amounts (receipts usually > 50)
+                    if ($val >= 100) {
+                        $score += 3;
+                    } elseif ($val >= 50) {
+                        $score += 2;
+                    } elseif ($val >= 10) {
                         $score += 1;
                     }
-                    if (preg_match('/^\d{6,}$/u', $normalized) && !$hasCurrency) {
+                    
+                    // Penalize very small numbers (likely to be dates/times/counts)
+                    if ($val < 25 && !$hasCurrencyClose) {
+                        $score -= 5;
+                    }
+                    
+                    if (preg_match('/^\d{6,}$/u', $normalized) && !$hasCurrencyClose) {
                         // large raw number without currency is suspicious (like INN/account)
                         $score -= 4;
                     }
@@ -1806,7 +1840,7 @@ PYTHON;
                         'raw' => $rawNumTrim,
                         'pos' => $pos,
                         'score' => $score,
-                        'has_currency' => $hasCurrency,
+                        'has_currency' => $hasCurrencyClose || $hasCurrencyBroad,
                     ];
                 }
 
