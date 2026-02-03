@@ -54,6 +54,70 @@ In order to ensure that the Laravel community is welcoming to all, please review
 
 If you discover a security vulnerability within Laravel, please send an e-mail to Taylor Otwell via [taylor@laravel.com](mailto:taylor@laravel.com). All security vulnerabilities will be promptly addressed.
 
+## Deployment
+
+### Настройка деплоя
+
+1. Установите переменные окружения в `.env`:
+```env
+DEPLOY_URL=https://project.siteaccess.ru
+DEPLOY_TOKEN=your-secret-token-here
+```
+
+2. Сгенерируйте токен безопасности:
+```bash
+php -r "echo bin2hex(random_bytes(32));"
+```
+
+### Локальная команда деплоя
+
+Для деплоя проекта выполните:
+```bash
+php artisan deploy
+```
+
+Команда выполнит:
+- Сборку assets (`npm run build`)
+- Коммит изменений в git
+- Отправку изменений в репозиторий
+- Запрос на сервер для обновления кода
+
+### API эндпоинт деплоя
+
+На сервере доступен эндпоинт `/api/deploy` для автоматического обновления:
+
+**Запрос:**
+```bash
+POST /api/deploy
+Authorization: Bearer {DEPLOY_TOKEN}
+```
+
+**Ответ при успехе:**
+```json
+{
+  "success": true,
+  "message": "Deployment completed successfully",
+  "log": [...]
+}
+```
+
+**Ответ при ошибке:**
+```json
+{
+  "success": false,
+  "errors": [...],
+  "log": [...]
+}
+```
+
+Эндпоинт выполняет:
+- Обновление кода из git (`git pull`)
+- Установку composer в `bin/composer` (если отсутствует)
+- Установку зависимостей (`composer install`)
+- Выполнение миграций (`php artisan migrate`)
+- Очистку всех кешей
+- Оптимизацию приложения
+
 ## License
 
 The Laravel framework is open-sourced software licensed under the [MIT license](https://opensource.org/licenses/MIT).

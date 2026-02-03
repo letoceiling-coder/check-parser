@@ -1,0 +1,39 @@
+{
+    "name": "letoceiling-coder/telegram",
+    "description": "Laravel package for Telegram Bot API integration",
+    "type": "library",
+    "license": "MIT",
+    "keywords": ["telegram", "bot", "api", "laravel"],
+    "authors": [
+        {
+            "name": "Letoceiling Coder",
+            "email": "info@letoceiling-coder.com"
+        }
+    ],
+    "require": {
+        "php": "^8.2",
+        "laravel/framework": "^12.0",
+        "guzzlehttp/guzzle": "^7.0"
+    },
+    "require-dev": {
+        "phpunit/phpunit": "^11.5"
+    },
+    "autoload": {
+        "psr-4": {
+            "LetoceilingCoder\\Telegram\\": "src/"
+        },
+        "files": [
+            "src/helpers.php"
+        ]
+    },
+    "extra": {
+        "laravel": {
+            "providers": [
+                "LetoceilingCoder\\Telegram\\TelegramServiceProvider"
+            ]
+        }
+    },
+    "minimum-stability": "stable",
+    "prefer-stable": true
+}
+

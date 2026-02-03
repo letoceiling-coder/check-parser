@@ -1,0 +1,5 @@
+{
+    "require": {
+        "letoceiling-coder/telegram": "^1.0"
+    }
+}
