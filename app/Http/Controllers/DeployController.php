@@ -326,9 +326,20 @@ EOF;
             $installResult = Process::path(base_path())->run("php {$installerPath} --install-dir={$binDir} --filename=composer");
             
             if (!$installResult->successful()) {
+                $errorOutput = trim($installResult->errorOutput());
+                $stdOutput = trim($installResult->output());
+                $errorMsg = $errorOutput ?: ($stdOutput ?: 'Unknown error during installation');
                 return [
                     'success' => false,
-                    'error' => 'Failed to install composer: ' . $installResult->errorOutput()
+                    'error' => 'Failed to install composer: ' . $errorMsg
+                ];
+            }
+            
+            // Verify that composer was actually created
+            if (!file_exists($targetPath)) {
+                return [
+                    'success' => false,
+                    'error' => 'Composer installer completed but composer file was not created at ' . $targetPath
                 ];
             }
 
