@@ -38,10 +38,42 @@ class DeployController extends Controller
         try {
             // Step 1: Update code from git
             $log[] = 'Updating code from git...';
-            $gitPull = Process::path(base_path())->run('git pull');
+            
+            // Stash local changes if any
+            $gitStash = Process::path(base_path())->run('git stash');
+            if ($gitStash->successful()) {
+                $log[] = 'Local changes stashed';
+            }
+            
+            // Reset any uncommitted changes
+            $gitReset = Process::path(base_path())->run('git reset --hard HEAD');
+            if ($gitReset->successful()) {
+                $log[] = 'Reset local changes';
+            }
+            
+            // Clean untracked files (except .env and storage)
+            $gitClean = Process::path(base_path())->run('git clean -fd --exclude=.env --exclude=storage --exclude=vendor');
+            if ($gitClean->successful()) {
+                $log[] = 'Cleaned untracked files';
+            }
+            
+            // Fetch latest changes
+            $gitFetch = Process::path(base_path())->run('git fetch origin');
+            if ($gitFetch->successful()) {
+                $log[] = 'Fetched latest changes';
+            }
+            
+            // Pull with strategy to overwrite local changes
+            $gitPull = Process::path(base_path())->run('git pull origin main --no-edit --strategy-option=theirs');
             
             if (!$gitPull->successful()) {
-                $errors[] = 'Git pull failed: ' . $gitPull->errorOutput();
+                // Try alternative: reset and pull
+                $gitResetHard = Process::path(base_path())->run('git reset --hard origin/main');
+                if ($gitResetHard->successful()) {
+                    $log[] = 'Code updated successfully (using reset)';
+                } else {
+                    $errors[] = 'Git pull failed: ' . $gitPull->errorOutput();
+                }
             } else {
                 $log[] = 'Code updated successfully: ' . $gitPull->output();
             }
