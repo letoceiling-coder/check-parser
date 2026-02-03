@@ -1221,17 +1221,28 @@ PYTHON;
     {
         try {
             $apiKey = env('OCR_SPACE_API_KEY', 'helloworld'); // Free tier key
+            $fileSize = filesize($filePath);
             
-            Log::info('Calling OCR.space API', ['file' => $filePath, 'file_size' => filesize($filePath)]);
+            // Skip if file is too large (over 1MB)
+            if ($fileSize > 1024 * 1024) {
+                Log::warning('File too large for OCR.space', ['file_size' => $fileSize]);
+                return null;
+            }
             
-            $response = Http::timeout(60)
-                ->asMultipart()
-                ->attach('file', file_get_contents($filePath), basename($filePath))
-                ->post('https://api.ocr.space/parse/image', [
+            Log::info('Calling OCR.space API', ['file' => $filePath, 'file_size' => $fileSize]);
+            
+            // Try base64 method first (faster and more reliable)
+            $fileContents = file_get_contents($filePath);
+            $base64Image = base64_encode($fileContents);
+            
+            $response = Http::timeout(30)
+                ->asForm()
+                ->post('https://api.ocr.space/parse/imagebase64', [
                     'apikey' => $apiKey,
-                    'language' => 'rus', // Russian language
-                    'isOverlayRequired' => 'false', // Must be string
-                    'detectOrientation' => 'true', // Must be string
+                    'base64Image' => 'data:image/jpeg;base64,' . $base64Image,
+                    'language' => 'rus',
+                    'isOverlayRequired' => 'false',
+                    'detectOrientation' => 'true',
                 ]);
 
             Log::info('OCR.space API response', [
@@ -1262,10 +1273,55 @@ PYTHON;
                 ]);
             }
 
+            // If base64 method failed, try multipart as fallback
+            if (!$response->successful() || !isset($response->json()['ParsedResults'])) {
+                Log::info('Trying OCR.space with multipart method');
+                $response = Http::timeout(30)
+                    ->asMultipart()
+                    ->attach('file', $fileContents, basename($filePath))
+                    ->post('https://api.ocr.space/parse/image', [
+                        'apikey' => $apiKey,
+                        'language' => 'rus',
+                        'isOverlayRequired' => 'false',
+                        'detectOrientation' => 'true',
+                    ]);
+            }
+
+            Log::info('OCR.space API response', [
+                'status' => $response->status(),
+                'successful' => $response->successful(),
+                'body_preview' => substr($response->body(), 0, 500)
+            ]);
+
+            if ($response->successful()) {
+                $data = $response->json();
+                
+                Log::info('OCR.space response data', ['has_parsed_results' => isset($data['ParsedResults'])]);
+                
+                if (isset($data['ParsedResults'][0]['ParsedText'])) {
+                    $text = trim($data['ParsedResults'][0]['ParsedText']);
+                    Log::info('OCR.space extracted text', ['text_length' => strlen($text), 'text_preview' => substr($text, 0, 200)]);
+                    return $text;
+                }
+                
+                // Check for errors
+                if (isset($data['ErrorMessage'])) {
+                    Log::warning('OCR.space error', ['error' => $data['ErrorMessage']]);
+                }
+            } else {
+                Log::warning('OCR.space API request failed', [
+                    'status' => $response->status(),
+                    'body' => substr($response->body(), 0, 500)
+                ]);
+            }
+
+            return null;
+        } catch (\Illuminate\Http\Client\ConnectionException $e) {
+            Log::warning('OCR.space API timeout/connection error: ' . $e->getMessage());
             return null;
         } catch (\Exception $e) {
             Log::error('OCR.space API exception: ' . $e->getMessage(), [
-                'trace' => $e->getTraceAsString()
+                'trace' => substr($e->getTraceAsString(), 0, 500)
             ]);
             return null;
         }
