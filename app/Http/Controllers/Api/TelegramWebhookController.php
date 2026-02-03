@@ -1247,10 +1247,25 @@ PYTHON;
                     Log::debug('Yandex Vision returned empty text');
                 }
             } else {
-                Log::warning('Yandex Vision API request failed', [
-                    'status' => $response->status(),
-                    'body' => substr($response->body(), 0, 500)
-                ]);
+                $errorBody = $response->json();
+                $errorMessage = $errorBody['message'] ?? 'Unknown error';
+                $errorCode = $errorBody['code'] ?? $response->status();
+                
+                if ($response->status() === 403) {
+                    Log::error('Yandex Vision API: Permission denied (403)', [
+                        'error_code' => $errorCode,
+                        'error_message' => $errorMessage,
+                        'folder_id' => $folderId,
+                        'hint' => 'IAM token may not have vision.viewer role. Please check Yandex Cloud IAM permissions for the folder.'
+                    ]);
+                } else {
+                    Log::warning('Yandex Vision API request failed', [
+                        'status' => $response->status(),
+                        'error_code' => $errorCode,
+                        'error_message' => $errorMessage,
+                        'body' => substr($response->body(), 0, 500)
+                    ]);
+                }
             }
 
             return null;
@@ -1509,58 +1524,12 @@ PYTHON;
             // Store original text for debugging
             $originalText = $text;
             
-            // Normalize text - remove extra spaces and newlines
-            $text = preg_replace('/\s+/', ' ', $text);
+            // Normalize text - preserve line breaks for better context
+            $text = preg_replace('/\r\n|\r/', "\n", $text);
             $textLower = mb_strtolower($text, 'UTF-8');
             
-            // Patterns to find amount in Russian receipts
-            $patterns = [
-                // "Итого: 550 ₽" or "Итого 550 ₽" or "Итого 550 P"
-                '/итого[:\s]+(\d+[\.,]?\d*)\s*[₽рубрp]/ui',
-                // "Сумма: 550 ₽" or "Сумма 550 ₽" or "Сумма 550 P"
-                '/сумма[:\s]+(\d+[\.,]?\d*)\s*[₽рубрp]/ui',
-                // "К оплате: 550 ₽"
-                '/к\s+оплате[:\s]+(\d+[\.,]?\d*)\s*[₽рубрp]/ui',
-                // "Всего: 550 ₽"
-                '/всего[:\s]+(\d+[\.,]?\d*)\s*[₽рубрp]/ui',
-                // "Итого 550 P" (with space before P)
-                '/итого\s+(\d+[\.,]?\d*)\s*[pр]/ui',
-                // Just find numbers with currency symbol (₽, руб, P, р)
-                '/(\d+[\.,]?\d*)\s*[₽рубрp]/ui',
-                // Find "550 P" pattern (common in receipts)
-                '/(\d+[\.,]?\d*)\s+p\b/ui',
-                // Find large numbers (likely amounts) - but not too large
-                '/(\d{2,5}[\.,]?\d*)/u',
-            ];
-
-            $amount = null;
+            // Extract date first to exclude it from amount search
             $date = null;
-
-            foreach ($patterns as $index => $pattern) {
-                // Try both original and lowercase text
-                $testTexts = [$textLower, $text];
-                foreach ($testTexts as $testText) {
-                    if (preg_match($pattern, $testText, $matches)) {
-                        $amountStr = str_replace(',', '.', $matches[1]);
-                        $amount = (float) $amountStr;
-                        
-                        // Validate amount (should be reasonable)
-                        if ($amount > 0 && $amount < 1000000) {
-                            Log::info('Amount found using pattern', [
-                                'pattern_index' => $index,
-                                'pattern' => $pattern,
-                                'amount' => $amount,
-                                'match' => $matches[0]
-                            ]);
-                            break 2; // Break from both loops
-                        } else {
-                            Log::debug('Amount found but invalid', ['amount' => $amount]);
-                        }
-                    }
-                }
-            }
-
-            // Try to find date
             $datePatterns = [
                 '/(\d{2})[\.\/](\d{2})[\.\/](\d{4})\s+(\d{2}):(\d{2}):(\d{2})/u', // 03.02.2026 10:14:31
                 '/(\d{2})[\.\/](\d{2})[\.\/](\d{4})/u', // 03.02.2026
@@ -1587,6 +1556,9 @@ PYTHON;
                             }
                             
                             $date = $dateStr;
+                            // Remove date from text to avoid matching it as amount
+                            $text = preg_replace($pattern, '', $text);
+                            $textLower = mb_strtolower($text, 'UTF-8');
                             break;
                         }
                     } catch (\Exception $e) {
@@ -1594,13 +1566,95 @@ PYTHON;
                     }
                 }
             }
+            
+            $amount = null;
+            
+            // Priority patterns - these are most reliable
+            $priorityPatterns = [
+                // "Итого: 550 ₽" or "Итого 550 ₽" or "Итого 550 P" or "Итого 10 000 ₽"
+                '/итого[:\s]+(\d{1,3}(?:\s+\d{3})*(?:[\.,]\d{2})?)\s*[₽рубрpе]/ui',
+                // "Сумма: 550 ₽" or "Сумма 550 ₽" or "Сумма 10 000 ₽"
+                '/сумма[:\s]+(\d{1,3}(?:\s+\d{3})*(?:[\.,]\d{2})?)\s*[₽рубрpе]/ui',
+                // "К оплате: 550 ₽"
+                '/к\s+оплате[:\s]+(\d{1,3}(?:\s+\d{3})*(?:[\.,]\d{2})?)\s*[₽рубрpе]/ui',
+                // "Всего: 550 ₽"
+                '/всего[:\s]+(\d{1,3}(?:\s+\d{3})*(?:[\.,]\d{2})?)\s*[₽рубрpе]/ui',
+            ];
+            
+            // Try priority patterns first
+            foreach ($priorityPatterns as $index => $pattern) {
+                if (preg_match($pattern, $textLower, $matches)) {
+                    // Remove spaces from number (e.g., "10 000" -> "10000")
+                    $amountStr = preg_replace('/\s+/', '', $matches[1]);
+                    $amountStr = str_replace(',', '.', $amountStr);
+                    $amount = (float) $amountStr;
+                    
+                    // Validate amount (should be reasonable for Russian receipts)
+                    if ($amount >= 1 && $amount <= 1000000) {
+                        Log::info('Amount found using priority pattern', [
+                            'pattern_index' => $index,
+                            'pattern' => $pattern,
+                            'amount' => $amount,
+                            'match' => $matches[0],
+                            'raw_match' => $matches[1]
+                        ]);
+                        break;
+                    } else {
+                        Log::debug('Amount found but invalid', ['amount' => $amount]);
+                        $amount = null;
+                    }
+                }
+            }
+            
+            // If priority patterns didn't work, try fallback patterns
+            if ($amount === null) {
+                $fallbackPatterns = [
+                    // Numbers with currency symbol (₽, руб, P, р, е)
+                    '/(\d{1,3}(?:\s+\d{3})*(?:[\.,]\d{2})?)\s*[₽рубрpе]/ui',
+                    // "550 P" pattern (common in receipts)
+                    '/(\d{1,3}(?:\s+\d{3})*(?:[\.,]\d{2})?)\s+p\b/ui',
+                ];
+                
+                foreach ($fallbackPatterns as $index => $pattern) {
+                    // Find all matches and pick the largest reasonable one
+                    if (preg_match_all($pattern, $textLower, $allMatches, PREG_SET_ORDER)) {
+                        $candidates = [];
+                        foreach ($allMatches as $match) {
+                            $amountStr = preg_replace('/\s+/', '', $match[1]);
+                            $amountStr = str_replace(',', '.', $amountStr);
+                            $candidateAmount = (float) $amountStr;
+                            
+                            // Validate - should be reasonable and not look like a date
+                            if ($candidateAmount >= 1 && $candidateAmount <= 1000000) {
+                                // Exclude if it looks like a date (e.g., 02.02, 03.02)
+                                if (!preg_match('/^\d{1,2}\.?\d{1,2}$/', $match[1])) {
+                                    $candidates[] = $candidateAmount;
+                                }
+                            }
+                        }
+                        
+                        if (!empty($candidates)) {
+                            // Pick the largest amount (most likely the total)
+                            $amount = max($candidates);
+                            Log::info('Amount found using fallback pattern', [
+                                'pattern_index' => $index,
+                                'pattern' => $pattern,
+                                'amount' => $amount,
+                                'candidates' => $candidates
+                            ]);
+                            break;
+                        }
+                    }
+                }
+            }
 
             if ($amount) {
                 return [
-                    'amount' => $amount,
+                    'sum' => $amount, // Use 'sum' for compatibility with existing code
+                    'amount' => $amount, // Also include 'amount' for clarity
                     'date' => $date,
                     'currency' => 'RUB',
-                    'raw_text' => substr($text, 0, 500), // Store first 500 chars for debugging
+                    'raw_text' => substr($originalText, 0, 500), // Store original text for debugging
                 ];
             }
 
