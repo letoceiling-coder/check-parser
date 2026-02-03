@@ -147,9 +147,23 @@ class CheckController extends Controller
 
     /**
      * Получить файл чека
+     * Поддерживает token в query string для iframe
      */
     public function file(Request $request, int $id)
     {
+        // Проверяем авторизацию - token может быть в header или query string
+        $token = $request->query('token') ?? $request->bearerToken();
+        
+        if (!$token) {
+            return response()->json(['error' => 'Unauthorized'], 401);
+        }
+        
+        // Проверяем токен через Sanctum
+        $accessToken = \Laravel\Sanctum\PersonalAccessToken::findToken($token);
+        if (!$accessToken) {
+            return response()->json(['error' => 'Invalid token'], 401);
+        }
+        
         $check = Check::findOrFail($id);
         
         if (!$check->file_path || !Storage::disk('local')->exists($check->file_path)) {

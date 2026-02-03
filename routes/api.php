@@ -14,6 +14,9 @@ Route::post('/telegram/webhook', [\App\Http\Controllers\Api\TelegramWebhookContr
 Route::get('/checks/problems', [\App\Http\Controllers\Api\CheckController::class, 'problems']);
 Route::get('/checks/analyze/{id}', [\App\Http\Controllers\Api\CheckController::class, 'analyze']);
 
+// File route - отдельно, поддерживает token в query string для iframe
+Route::get('/checks/{id}/file', [\App\Http\Controllers\Api\CheckController::class, 'file']);
+
 // Auth routes
 Route::post('/login', [AuthController::class, 'login']);
 Route::middleware('auth:sanctum')->group(function () {
@@ -32,5 +35,4 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/checks/{id}', [\App\Http\Controllers\Api\CheckController::class, 'show']);
     Route::put('/checks/{id}', [\App\Http\Controllers\Api\CheckController::class, 'update']);
     Route::delete('/checks/{id}', [\App\Http\Controllers\Api\CheckController::class, 'destroy']);
-    Route::get('/checks/{id}/file', [\App\Http\Controllers\Api\CheckController::class, 'file']);
 });
