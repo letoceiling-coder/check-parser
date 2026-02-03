@@ -95,23 +95,63 @@ class BotController extends Controller
             ->firstOrFail();
 
         try {
-            // Send test message using Telegram API
-            $response = Http::post("https://api.telegram.org/bot{$bot->token}/sendMessage", [
-                'chat_id' => $request->user()->id, // You might want to get chat_id from bot
-                'text' => 'Test message from webhook!',
-            ]);
+            // First, get bot info to verify token is valid
+            $botInfoResponse = Http::timeout(10)
+                ->get("https://api.telegram.org/bot{$bot->token}/getMe");
+
+            if (!$botInfoResponse->successful()) {
+                $errorData = $botInfoResponse->json();
+                return response()->json([
+                    'message' => 'Invalid bot token or bot not found',
+                    'error' => $errorData['description'] ?? 'Unknown error',
+                ], 400);
+            }
+
+            $botInfo = $botInfoResponse->json();
+            $botUsername = $botInfo['result']['username'] ?? 'unknown';
+
+            // Try to send test message to the user who created the bot
+            // Note: This will only work if the user has started a conversation with the bot
+            $chatId = $request->user()->id;
+            
+            $response = Http::timeout(10)
+                ->post("https://api.telegram.org/bot{$bot->token}/sendMessage", [
+                    'chat_id' => $chatId,
+                    'text' => '✅ Тестовое сообщение от бота! Webhook работает корректно.',
+                ]);
 
             if ($response->successful()) {
                 return response()->json([
-                    'message' => 'Webhook test successful! Check your Telegram bot.',
+                    'message' => 'Webhook test successful! Check your Telegram bot (@' . $botUsername . ').',
+                    'bot_username' => $botUsername,
                     'response' => $response->json(),
                 ]);
             }
 
+            // If sending message failed, check the error
+            $errorData = $response->json();
+            $errorDescription = $errorData['description'] ?? 'Unknown error';
+            
+            // Common error: user hasn't started conversation with bot
+            if (str_contains($errorDescription, 'chat not found') || str_contains($errorDescription, 'bot was blocked')) {
+                return response()->json([
+                    'message' => 'Для тестирования webhook необходимо начать диалог с ботом. Найдите бота @' . $botUsername . ' в Telegram и отправьте ему команду /start.',
+                    'bot_username' => $botUsername,
+                    'error' => $errorDescription,
+                ], 400);
+            }
+
             return response()->json([
-                'message' => 'Webhook test failed',
-                'error' => $response->json(),
+                'message' => 'Webhook test failed: ' . $errorDescription,
+                'bot_username' => $botUsername,
+                'error' => $errorData,
             ], 400);
+        } catch (\Illuminate\Http\Client\ConnectionException $e) {
+            Log::error('Webhook test connection error: ' . $e->getMessage());
+            return response()->json([
+                'message' => 'Connection error: Unable to reach Telegram API',
+                'error' => $e->getMessage(),
+            ], 500);
         } catch (\Exception $e) {
             Log::error('Webhook test error: ' . $e->getMessage());
             return response()->json([
