@@ -467,10 +467,15 @@ class TelegramWebhookController extends Controller
             // Tesseract first (if installed) - local, fast, no API limits
             // Then remote Tesseract API, then external APIs as fallback
             // OCR methods - try multiple, use first successful result with enough text
+            // Порядок OCR методов по приоритету:
+            // 1. Remote Tesseract - лучше для русского текста, предобработка изображений
+            // 2. Local Tesseract - быстрый, но обычно не установлен на shared hosting
+            // 3. OCR.space - бесплатный fallback
+            // 4. Google Vision - платный, но точный
             $ocrMethods = [
+                'extractTextWithRemoteTesseract', // Remote VPS Tesseract API - лучший для русского
                 'extractTextWithTesseract',       // Local - fastest, no limits
-                'extractTextWithOCRspace',        // OCR.space - good for Russian text
-                'extractTextWithRemoteTesseract', // Remote VPS Tesseract API
+                'extractTextWithOCRspace',        // OCR.space - fallback
                 'extractTextWithGoogleVision',    // Paid but reliable
             ];
 
@@ -499,26 +504,36 @@ class TelegramWebhookController extends Controller
                             'text_preview' => substr($cleanText, 0, 300)
                         ]);
                         
-                        // Accept if: enough text AND reasonable readable ratio
-                        // For receipts we expect at least 100 chars and 30% readable
-                        if ($textLen >= 100 && $readableRatio >= 0.30) {
+                        // Проверяем наличие ключевых слов чека/квитанции
+                        $textLower = mb_strtolower($cleanText, 'UTF-8');
+                        $hasKeywords = preg_match('/итого|сумма|перевод|оплата|чек|квитанция|банк|операци|комисси/ui', $textLower);
+                        $hasAmount = preg_match('/\d{1,3}[\s\x{00A0}]?\d{3}|\d{4,}/u', $cleanText); // Число >= 1000 или 4+ цифры
+                        
+                        // Accept if: достаточно текста И есть признаки чека
+                        // Для чеков ожидаем минимум 150 символов И ключевые слова
+                        $isGoodText = ($textLen >= 150 && $readableRatio >= 0.50 && $hasKeywords) ||
+                                      ($textLen >= 200 && $readableRatio >= 0.40) ||
+                                      ($textLen >= 100 && $readableRatio >= 0.60 && $hasKeywords && $hasAmount);
+                        
+                        if ($isGoodText) {
                             $extractedText = $text;
                             $usedOcrMethod = $method;
                             $ocrTextLength = $textLen;
                             $ocrReadableRatio = $readableRatio;
-                            break;
-                        } elseif ($textLen >= 50 && $readableRatio >= 0.40) {
-                            // Shorter but more readable is also OK
-                            $extractedText = $text;
-                            $usedOcrMethod = $method;
-                            $ocrTextLength = $textLen;
-                            $ocrReadableRatio = $readableRatio;
+                            Log::info("Text accepted from {$method}", [
+                                'text_length' => $textLen,
+                                'readable_ratio' => round($readableRatio, 2),
+                                'has_keywords' => $hasKeywords,
+                                'has_amount' => $hasAmount
+                            ]);
                             break;
                         } else {
-                            Log::warning("OCR text quality too low, trying next method", [
+                            Log::warning("OCR text quality too low or missing keywords, trying next method", [
                                 'method' => $method,
                                 'text_length' => $textLen,
-                                'readable_ratio' => round($readableRatio, 2)
+                                'readable_ratio' => round($readableRatio, 2),
+                                'has_keywords' => $hasKeywords,
+                                'has_amount' => $hasAmount
                             ]);
                         }
                     } else {
