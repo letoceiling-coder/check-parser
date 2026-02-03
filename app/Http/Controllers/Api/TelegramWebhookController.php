@@ -204,14 +204,15 @@ class TelegramWebhookController extends Controller
             // If we get here, all attempts failed
             Log::error("All QR code extraction attempts failed", [
                 'photo_sizes_tried' => count($photoSizes),
-                'files_processed' => count($processedFiles)
+                'files_processed' => count($processedFiles),
+                'chat_id' => $chatId
             ]);
             
             foreach ($processedFiles as $pf) {
                 Storage::disk('local')->delete($pf);
             }
             
-            $this->sendMessage($bot, $chatId, '❌ Не удалось распознать QR код на чеке. Убедитесь, что фото четкое и QR код виден.');
+            $this->sendMessage($bot, $chatId, '❌ Не удалось распознать QR код на чеке. Убедитесь, что фото четкое и QR код виден. Пришлите другое фото.');
         } catch (\Exception $e) {
             Log::error('Error processing photo: ' . $e->getMessage(), [
                 'trace' => $e->getTraceAsString(),
@@ -317,40 +318,212 @@ class TelegramWebhookController extends Controller
 
     /**
      * Process check - extract QR code and parse data
+     * Tries multiple methods and image preprocessing variations
      */
     private function processCheck(string $filePath): ?array
     {
         try {
             $fullPath = Storage::disk('local')->path($filePath);
 
-            // Try multiple methods in order of reliability
-            $methods = [
-                'extractQRCodeWithAPI1',      // qrserver.com
-                'extractQRCodeWithAPI2',      // goqr.me
-                'extractQRCodeWithAPI3',      // api.qrserver alternative
-                'extractQRCodeWithZxing',     // zxing (if available)
-                'extractQRCodeWithPython',    // Python pyzbar (if available)
+            // Try original image first
+            $result = $this->tryExtractQRCode($fullPath);
+            if ($result) {
+                return $result;
+            }
+
+            // Try with different preprocessing variations
+            $preprocessVariations = [
+                ['contrast' => 1, 'sharpen' => true, 'grayscale' => true],
+                ['contrast' => 2, 'sharpen' => true, 'grayscale' => true],
+                ['contrast' => 1, 'sharpen' => false, 'grayscale' => true],
+                ['contrast' => 1, 'sharpen' => true, 'grayscale' => false],
             ];
 
-            foreach ($methods as $method) {
-                try {
-                    $qrData = $this->$method($fullPath);
-                    if ($qrData) {
-                        Log::info("QR code extracted using {$method}", ['data' => substr($qrData, 0, 100)]);
-                        $parsed = $this->parseCheckData($qrData);
-                        if ($parsed) {
-                            return $parsed;
-                        }
+            foreach ($preprocessVariations as $variation) {
+                $processedPath = $this->preprocessImageWithOptions($fullPath, $variation);
+                if ($processedPath) {
+                    $result = $this->tryExtractQRCode(Storage::disk('local')->path($processedPath));
+                    if ($result) {
+                        Storage::disk('local')->delete($processedPath);
+                        return $result;
                     }
-                } catch (\Exception $e) {
-                    Log::debug("Method {$method} failed: " . $e->getMessage());
-                    continue;
+                    Storage::disk('local')->delete($processedPath);
                 }
             }
 
             return null;
         } catch (\Exception $e) {
             Log::error('Error processing check: ' . $e->getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * Try to extract QR code using all available methods
+     */
+    private function tryExtractQRCode(string $filePath): ?array
+    {
+        // Try multiple methods in order of reliability
+        $methods = [
+            'extractQRCodeWithAPI1',      // qrserver.com (most reliable)
+            'extractQRCodeWithAPI2',      // goqr.me
+            'extractQRCodeWithAPI4',      // api4free.com
+            'extractQRCodeWithAPI5',      // qr-code-reader.p.rapidapi.com (if key available)
+            'extractQRCodeWithAPI3',      // api.qrserver alternative method
+            'extractQRCodeWithZxing',     // zxing (if available)
+            'extractQRCodeWithPython',    // Python pyzbar (if available)
+        ];
+
+        foreach ($methods as $method) {
+            try {
+                Log::debug("Trying method: {$method}");
+                $qrData = $this->$method($filePath);
+                if ($qrData && !empty(trim($qrData))) {
+                    Log::info("QR code extracted using {$method}", [
+                        'data_length' => strlen($qrData),
+                        'data_preview' => substr($qrData, 0, 100)
+                    ]);
+                    $parsed = $this->parseCheckData($qrData);
+                    if ($parsed) {
+                        Log::info("Check data parsed successfully", ['check_data' => $parsed]);
+                        return $parsed;
+                    } else {
+                        Log::warning("QR data extracted but parsing failed", ['qr_data' => substr($qrData, 0, 200)]);
+                    }
+                }
+            } catch (\Exception $e) {
+                Log::debug("Method {$method} failed: " . $e->getMessage());
+                continue;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Preprocess image with specific options
+     */
+    private function preprocessImageWithOptions(string $sourcePath, array $options): ?string
+    {
+        try {
+            if (!extension_loaded('gd') && !extension_loaded('imagick')) {
+                return null;
+            }
+
+            $imageInfo = getimagesize($sourcePath);
+            if (!$imageInfo) {
+                return null;
+            }
+
+            $mimeType = $imageInfo['mime'];
+            $processedPath = 'telegram/processed_' . uniqid() . '.jpg';
+
+            if (extension_loaded('imagick')) {
+                return $this->preprocessWithImagickOptions($sourcePath, $processedPath, $options);
+            } elseif (extension_loaded('gd')) {
+                return $this->preprocessWithGDOptions($sourcePath, $processedPath, $mimeType, $options);
+            }
+
+            return null;
+        } catch (\Exception $e) {
+            Log::debug('Image preprocessing with options failed: ' . $e->getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * Preprocess image with Imagick using specific options
+     */
+    private function preprocessWithImagickOptions(string $sourcePath, string $targetPath, array $options): ?string
+    {
+        try {
+            $image = new \Imagick($sourcePath);
+            
+            if ($options['grayscale'] ?? true) {
+                $image->transformImageColorspace(\Imagick::COLORSPACE_GRAY);
+            }
+            
+            // Normalize
+            $image->normalizeImage();
+            
+            // Contrast
+            $contrast = $options['contrast'] ?? 1;
+            for ($i = 0; $i < $contrast; $i++) {
+                $image->contrastImage(1);
+            }
+            
+            // Sharpen
+            if ($options['sharpen'] ?? true) {
+                $image->sharpenImage(0, 1);
+            }
+            
+            // Save
+            $image->setImageFormat('jpg');
+            $image->setImageCompressionQuality(95);
+            $image->writeImage(Storage::disk('local')->path($targetPath));
+            $image->destroy();
+
+            return $targetPath;
+        } catch (\Exception $e) {
+            Log::debug('Imagick preprocessing with options failed: ' . $e->getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * Preprocess image with GD using specific options
+     */
+    private function preprocessWithGDOptions(string $sourcePath, string $targetPath, string $mimeType, array $options): ?string
+    {
+        try {
+            // Load image
+            switch ($mimeType) {
+                case 'image/jpeg':
+                    $image = imagecreatefromjpeg($sourcePath);
+                    break;
+                case 'image/png':
+                    $image = imagecreatefrompng($sourcePath);
+                    break;
+                case 'image/gif':
+                    $image = imagecreatefromgif($sourcePath);
+                    break;
+                default:
+                    return null;
+            }
+
+            if (!$image) {
+                return null;
+            }
+
+            // Grayscale
+            if ($options['grayscale'] ?? true) {
+                imagefilter($image, IMG_FILTER_GRAYSCALE);
+            }
+            
+            // Contrast
+            $contrast = $options['contrast'] ?? 1;
+            for ($i = 0; $i < $contrast; $i++) {
+                imagefilter($image, IMG_FILTER_CONTRAST, -20);
+            }
+            
+            // Sharpen
+            if ($options['sharpen'] ?? true) {
+                $sharpen = [
+                    [-1, -1, -1],
+                    [-1, 16, -1],
+                    [-1, -1, -1]
+                ];
+                imageconvolution($image, $sharpen, 8, 0);
+            }
+
+            // Save
+            $targetFullPath = Storage::disk('local')->path($targetPath);
+            imagejpeg($image, $targetFullPath, 95);
+            imagedestroy($image);
+
+            return $targetPath;
+        } catch (\Exception $e) {
+            Log::debug('GD preprocessing with options failed: ' . $e->getMessage());
             return null;
         }
     }
@@ -590,20 +763,19 @@ class TelegramWebhookController extends Controller
     }
 
     /**
-     * Extract QR code using API 3 (alternative method)
+     * Extract QR code using API 3 (alternative method with different parameters)
      */
     private function extractQRCodeWithAPI3(string $filePath): ?string
     {
         try {
-            // Try with base64 encoding
-            $imageData = base64_encode(file_get_contents($filePath));
+            // Try qrserver.com with different approach
             $url = 'https://api.qrserver.com/v1/read-qr-code/';
             
             $response = Http::timeout(30)
-                ->asForm()
-                ->post($url, [
-                    'file' => 'data:image/jpeg;base64,' . $imageData
-                ]);
+                ->attach('file', file_get_contents($filePath), basename($filePath), [
+                    'Content-Type' => 'image/jpeg'
+                ])
+                ->post($url);
 
             if ($response->successful()) {
                 $data = $response->json();
@@ -618,6 +790,66 @@ class TelegramWebhookController extends Controller
             return null;
         } catch (\Exception $e) {
             Log::debug('API3 (alternative) failed: ' . $e->getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * Extract QR code using API 4 (api4free.com)
+     */
+    private function extractQRCodeWithAPI4(string $filePath): ?string
+    {
+        try {
+            $url = 'https://api4free.com/api/qr-reader';
+            
+            $response = Http::timeout(30)
+                ->attach('image', file_get_contents($filePath), basename($filePath))
+                ->post($url);
+
+            if ($response->successful()) {
+                $data = $response->json();
+                if (isset($data['data']) && !empty(trim($data['data']))) {
+                    return $data['data'];
+                }
+                if (isset($data['text']) && !empty(trim($data['text']))) {
+                    return $data['text'];
+                }
+            }
+
+            return null;
+        } catch (\Exception $e) {
+            Log::debug('API4 (api4free) failed: ' . $e->getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * Extract QR code using API 5 (rapidapi - requires API key, but we try anyway)
+     */
+    private function extractQRCodeWithAPI5(string $filePath): ?string
+    {
+        try {
+            // This API might require a key, but we try without it first
+            $url = 'https://qr-code-reader.p.rapidapi.com/api/v1/read-qr-code';
+            
+            $response = Http::timeout(30)
+                ->withHeaders([
+                    'X-RapidAPI-Key' => env('RAPIDAPI_KEY', ''),
+                    'X-RapidAPI-Host' => 'qr-code-reader.p.rapidapi.com'
+                ])
+                ->attach('file', file_get_contents($filePath), basename($filePath))
+                ->post($url);
+
+            if ($response->successful()) {
+                $data = $response->json();
+                if (isset($data[0]['data']) && !empty(trim($data[0]['data']))) {
+                    return $data[0]['data'];
+                }
+            }
+
+            return null;
+        } catch (\Exception $e) {
+            Log::debug('API5 (rapidapi) failed: ' . $e->getMessage());
             return null;
         }
     }
