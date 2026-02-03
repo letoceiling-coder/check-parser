@@ -176,18 +176,28 @@ class TelegramWebhookController extends Controller
         ];
 
         try {
-            // Try all photo sizes, starting from largest (best quality)
+            // Используем ТОЛЬКО 2 самых больших размера фото
+            // Маленькие фото (thumbnail) дают плохое качество OCR
             $photoSizes = array_reverse($photo); // Start with largest
+            $photoSizes = array_slice($photoSizes, 0, 2); // Только 2 самых больших
             
             $checkData = null;
             $processedFiles = [];
             $lastFilePath = null;
             $lastFileSize = null;
+            $bestRawText = null;
+            $bestOcrMethod = null;
 
             foreach ($photoSizes as $index => $photoSize) {
                 $fileId = $photoSize['file_id'];
                 $width = $photoSize['width'] ?? 0;
                 $height = $photoSize['height'] ?? 0;
+                
+                // Пропускаем слишком маленькие фото
+                if ($width < 300 || $height < 300) {
+                    Log::info("Skipping small photo", ['width' => $width, 'height' => $height]);
+                    continue;
+                }
                 
                 Log::info("Trying photo size {$index}", [
                     'file_id' => substr($fileId, 0, 20) . '...',
@@ -234,6 +244,9 @@ class TelegramWebhookController extends Controller
                     return;
                 } else {
                     Log::warning("OCR extraction failed for photo size {$index}");
+                    // НЕ переходим к меньшим фото - выходим из цикла
+                    // Если большое фото не дало результат, меньшие тоже не дадут
+                    break;
                 }
             }
 
@@ -1911,21 +1924,116 @@ PYTHON;
             // Also fix standalone "ООО" after numbers: "25 ООО р" -> "25 000 р"
             $textNormalized = preg_replace('/(\d+)\s+[ОоOo]{3}\s+([рРеЕ₽Pp])/u', '$1 000 $2', $textNormalized);
             
-            // Also try to find amounts with "Итого" or "Сумма" labels directly
-            // This catches cases like "Итого\n10 000 Р" where number is on next line
-            $directAmountPatterns = [
-                '/итого\s*[:\-]?\s*(\d[\d\s]*\d|\d+)\s*[₽РрPp]/ui',
-                '/сумма\s*[:\-]?\s*(\d[\d\s]*\d|\d+)\s*[₽РрPp]/ui',
-            ];
+            // ==========================================
+            // ПОИСК СУММЫ - улучшенная логика
+            // ==========================================
+            // OCR часто путает ₽ с "е", "e", "P", "р", "R", "Р"
+            $currencyPattern = '[₽РрPpеeЕER]';
+            
+            // Нормализуем текст для поиска
+            $textForSearch = $text; // Оригинальный текст с переносами
+            $textOneLine = preg_replace('/[\r\n]+/', ' ', $text); // Текст в одну строку
+            
+            Log::debug('Searching for amount in text', [
+                'text_length' => mb_strlen($text),
+                'first_500_chars' => mb_substr($textOneLine, 0, 500)
+            ]);
             
             $directAmount = null;
-            foreach ($directAmountPatterns as $pattern) {
-                if (preg_match($pattern, $textNormalized, $directMatch)) {
-                    $numStr = preg_replace('/\s+/', '', $directMatch[1]);
+            
+            // 1. Ищем паттерн "Итого X XXX ₽" или "Итого\nX XXX ₽"
+            // Поддерживаем разные форматы чисел: "10 000", "10000", "10,000.00"
+            $amountRegex = '(\d{1,3}(?:[\s\x{00A0}]+\d{3})*(?:[.,]\d{2})?|\d+(?:[.,]\d{2})?)';
+            
+            $directPatterns = [
+                // Итого + число + валюта (может быть на разных строках)
+                '/итого[^\d]{0,30}' . $amountRegex . '\s*' . $currencyPattern . '/ui',
+                // Сумма + число + валюта
+                '/сумма[^\d]{0,30}' . $amountRegex . '\s*' . $currencyPattern . '/ui',
+                // Число + валюта рядом с "Итого" в пределах 50 символов
+                '/итого.{0,50}?' . $amountRegex . '\s*' . $currencyPattern . '/uis',
+            ];
+            
+            foreach ($directPatterns as $pattern) {
+                if (preg_match($pattern, $textOneLine, $match)) {
+                    $numStr = preg_replace('/[\s\x{00A0}]+/u', '', $match[1]);
+                    $numStr = str_replace(',', '.', $numStr);
                     if (is_numeric($numStr)) {
-                        $directAmount = (float) $numStr;
-                        Log::debug('Found direct amount match', ['pattern' => $pattern, 'amount' => $directAmount]);
-                        break;
+                        $val = (float) $numStr;
+                        if ($val >= 100 && $val < 10000000) {
+                            $directAmount = $val;
+                            Log::info('Found direct amount with Итого/Сумма', [
+                                'pattern' => $pattern,
+                                'amount' => $directAmount,
+                                'raw_match' => mb_substr($match[0], 0, 100)
+                            ]);
+                            break;
+                        }
+                    }
+                }
+            }
+            
+            // 2. Если не нашли с ключевыми словами - ищем все суммы с валютой
+            if (!$directAmount) {
+                $allAmountsWithCurrency = [];
+                
+                // Паттерн: число (формат "X XXX" или "XXXXX") + символ валюты
+                if (preg_match_all('/' . $amountRegex . '\s*' . $currencyPattern . '/ui', $textOneLine, $matches, PREG_SET_ORDER | PREG_OFFSET_CAPTURE)) {
+                    foreach ($matches as $match) {
+                        $numStr = preg_replace('/[\s\x{00A0}]+/u', '', $match[1][0]);
+                        $numStr = str_replace(',', '.', $numStr);
+                        if (is_numeric($numStr)) {
+                            $val = (float) $numStr;
+                            // Исключаем слишком маленькие и слишком большие значения
+                            if ($val >= 100 && $val < 10000000) {
+                                $allAmountsWithCurrency[] = [
+                                    'amount' => $val,
+                                    'raw' => $match[0][0],
+                                    'pos' => $match[0][1]
+                                ];
+                            }
+                        }
+                    }
+                }
+                
+                Log::debug('All amounts with currency found', ['amounts' => $allAmountsWithCurrency]);
+                
+                // Выбираем наибольшую сумму (обычно это итого)
+                if (!empty($allAmountsWithCurrency)) {
+                    usort($allAmountsWithCurrency, fn($a, $b) => $b['amount'] <=> $a['amount']);
+                    $directAmount = $allAmountsWithCurrency[0]['amount'];
+                    Log::info('Selected largest amount with currency', [
+                        'amount' => $directAmount,
+                        'raw' => $allAmountsWithCurrency[0]['raw']
+                    ]);
+                }
+            }
+            
+            // 3. Если всё ещё не нашли - пробуем без символа валюты, но рядом с ключевыми словами
+            if (!$directAmount) {
+                $keywordPatterns = [
+                    '/итого[:\s]+' . $amountRegex . '/ui',
+                    '/сумма[:\s]+' . $amountRegex . '/ui',
+                    '/к\s*оплате[:\s]+' . $amountRegex . '/ui',
+                    '/всего[:\s]+' . $amountRegex . '/ui',
+                ];
+                
+                foreach ($keywordPatterns as $pattern) {
+                    if (preg_match($pattern, $textOneLine, $match)) {
+                        $numStr = preg_replace('/[\s\x{00A0}]+/u', '', $match[1]);
+                        $numStr = str_replace(',', '.', $numStr);
+                        if (is_numeric($numStr)) {
+                            $val = (float) $numStr;
+                            if ($val >= 100 && $val < 10000000) {
+                                $directAmount = $val;
+                                Log::info('Found amount near keyword (no currency symbol)', [
+                                    'pattern' => $pattern,
+                                    'amount' => $directAmount,
+                                    'raw_match' => $match[0]
+                                ]);
+                                break;
+                            }
+                        }
                     }
                 }
             }
@@ -2084,25 +2192,31 @@ PYTHON;
                 }
             }
             
-            // If direct pattern match found a higher amount, prefer it (likely more accurate)
-            if ($directAmount && (!$amount || $directAmount > $amount * 0.9)) {
-                Log::info('Using direct pattern amount', [
+            // Приоритет: directAmount (найдена рядом с ключевыми словами) > scored amount
+            // directAmount более надежна т.к. привязана к контексту (Итого, Сумма и т.д.)
+            if ($directAmount) {
+                Log::info('Using direct pattern amount (highest priority)', [
                     'direct_amount' => $directAmount,
                     'scored_amount' => $amount
                 ]);
                 $amount = $directAmount;
             }
+            
+            // Если directAmount не найдена, используем scored amount только если score достаточно высок
+            // Если и score низкий - всё равно возвращаем null
 
             if ($amount) {
+                Log::info('Final amount selected', ['amount' => $amount, 'date' => $date]);
                 return [
-                    'sum' => $amount, // Use 'sum' for compatibility with existing code
-                    'amount' => $amount, // Also include 'amount' for clarity
+                    'sum' => $amount,
+                    'amount' => $amount,
                     'date' => $date,
                     'currency' => 'RUB',
-                    'raw_text' => substr($originalText, 0, 500), // Store original text for debugging
+                    'raw_text' => substr($originalText, 0, 500),
                 ];
             }
 
+            Log::warning('No reliable amount found in text');
             return null;
         } catch (\Exception $e) {
             Log::error('Error parsing payment amount: ' . $e->getMessage());
