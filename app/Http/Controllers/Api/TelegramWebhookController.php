@@ -1170,32 +1170,44 @@ PYTHON;
             }
 
             $image = new \Imagick();
-            // 300 DPI is good balance between quality and file size
-            $image->setResolution(300, 300);
+            // Use higher DPI for better text quality
+            $image->setResolution(450, 450);
             $image->readImage($pdfPath . '[0]'); // Read first page only
             
-            // Enhance image quality for OCR
-            $image->setImageFormat('jpg');
-            $image->setImageCompressionQuality(85); // Good quality, smaller file
-            $image->normalizeImage(); // Improve contrast
-            $image->sharpenImage(0, 1); // Slight sharpening
+            // Convert to RGB colorspace for better OCR
+            $image->setImageColorspace(\Imagick::COLORSPACE_SRGB);
             
-            // Resize if too large (OCR works better with reasonable sizes)
+            // Enhance image quality for OCR
+            $image->setImageFormat('png'); // PNG preserves text better than JPG
+            $image->setImageCompressionQuality(95);
+            
+            // Convert to grayscale for OCR
+            $image->transformImageColorspace(\Imagick::COLORSPACE_GRAY);
+            
+            // Improve contrast
+            $image->normalizeImage();
+            $image->contrastImage(true);
+            
+            // Sharpen text edges
+            $image->sharpenImage(0, 1.5);
+            
+            // Resize if too large
             $width = $image->getImageWidth();
             $height = $image->getImageHeight();
-            if ($width > 2500 || $height > 2500) {
-                // Scale down while maintaining aspect ratio
-                $image->scaleImage(2500, 2500, true);
+            Log::info('PDF image dimensions', ['width' => $width, 'height' => $height]);
+            if ($width > 3500 || $height > 3500) {
+                $image->scaleImage(3500, 3500, true);
             }
             
-            $imagePath = 'telegram/pdf_' . uniqid() . '.jpg';
+            $imagePath = 'telegram/pdf_' . uniqid() . '.png';
             $image->writeImage(Storage::disk('local')->path($imagePath));
             $image->destroy();
 
             Log::info('PDF converted to image', [
                 'pdf_path' => $pdfPath,
                 'image_path' => $imagePath,
-                'resolution' => '300 DPI'
+                'resolution' => '450 DPI',
+                'format' => 'PNG grayscale'
             ]);
 
             return Storage::disk('local')->path($imagePath);
