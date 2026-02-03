@@ -51,20 +51,17 @@ function preprocessImage($inputPath, $outputPath) {
         $width = $image->getImageWidth();
         $height = $image->getImageHeight();
         
-        // Для больших изображений (PDF конверсии) - улучшаем контраст для мелкого текста
+        // Для больших изображений (PDF конверсии) - МИНИМАЛЬНАЯ обработка
+        // Агрессивная обработка может убить светлый/серый текст (например, дату)
         if ($width > 1000 && $height > 1000) {
-            // Конвертируем в grayscale для лучшего OCR
+            // Только конвертируем в grayscale - без усиления контраста!
             $image->transformImageColorspace(Imagick::COLORSPACE_GRAY);
             
-            // Нормализация контраста
-            $image->normalizeImage();
+            // Очень легкая нормализация (может помочь с неравномерным освещением)
+            // $image->normalizeImage(); // ОТКЛЮЧЕНО - может убить светлый текст
             
-            // Усиливаем контраст для мелкого серого текста
-            $image->contrastImage(true);
-            $image->contrastImage(true);
-            
-            // Легкая резкость для улучшения краев текста
-            $image->sharpenImage(0, 1.0);
+            // НЕ усиливаем контраст - это убивает светлый серый текст на белом фоне!
+            // $image->contrastImage(true);
             
             $image->setImageFormat('png');
             $image->setImageCompressionQuality(95);
