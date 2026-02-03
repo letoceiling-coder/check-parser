@@ -7,6 +7,9 @@ use Illuminate\Support\Facades\Route;
 
 Route::post('/deploy', [DeployController::class, 'deploy']);
 
+// Telegram webhook (public, no auth required)
+Route::post('/telegram/webhook', [\App\Http\Controllers\Api\TelegramWebhookController::class, 'handle']);
+
 // Auth routes
 Route::post('/login', [AuthController::class, 'login']);
 Route::middleware('auth:sanctum')->group(function () {

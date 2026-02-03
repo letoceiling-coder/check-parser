@@ -11,7 +11,6 @@ const getDefaultWebhookUrl = () => {
 function BotSettings({ bot, onBotCreated, onUpdate }) {
   const [formData, setFormData] = useState({
     token: bot?.token || '',
-    webhook_url: bot?.webhook_url || getDefaultWebhookUrl(),
   });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
@@ -142,24 +141,6 @@ function BotSettings({ bot, onBotCreated, onUpdate }) {
             </p>
           </div>
 
-          <div>
-            <label htmlFor="webhook_url" className="block text-sm font-medium text-gray-700 mb-2">
-              Webhook URL
-            </label>
-            <input
-              type="url"
-              id="webhook_url"
-              name="webhook_url"
-              value={formData.webhook_url}
-              onChange={handleChange}
-              required
-              className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-200"
-              placeholder="https://yourdomain.com/api/telegram/webhook"
-            />
-            <p className="mt-1 text-sm text-gray-500">
-              URL для получения обновлений от Telegram
-            </p>
-          </div>
 
           <div className="flex space-x-4">
             <button
@@ -232,22 +213,9 @@ function BotSettings({ bot, onBotCreated, onUpdate }) {
           </p>
         </div>
 
-        <div>
-          <label htmlFor="webhook_url" className="block text-sm font-medium text-gray-700 mb-2">
-            Webhook URL *
-          </label>
-          <input
-            type="url"
-            id="webhook_url"
-            name="webhook_url"
-            value={formData.webhook_url}
-            onChange={handleChange}
-            required
-            className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-200"
-            placeholder="https://yourdomain.com/api/telegram/webhook"
-          />
-          <p className="mt-1 text-sm text-gray-500">
-            URL для получения обновлений от Telegram
+        <div className="bg-blue-50 border border-blue-200 text-blue-700 px-4 py-3 rounded-lg">
+          <p className="text-sm">
+            <strong>Webhook URL будет автоматически сгенерирован:</strong> {getDefaultWebhookUrl()}
           </p>
         </div>
 

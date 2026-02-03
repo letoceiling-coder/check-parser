@@ -40,13 +40,15 @@ class BotController extends Controller
 
         $request->validate([
             'token' => 'required|string',
-            'webhook_url' => 'required|url',
         ]);
+
+        // Generate webhook URL automatically
+        $webhookUrl = config('app.url') . '/api/telegram/webhook';
 
         $bot = TelegramBot::create([
             'user_id' => $request->user()->id,
             'token' => $request->token,
-            'webhook_url' => $request->webhook_url,
+            'webhook_url' => $webhookUrl,
             'is_active' => true,
         ]);
 
@@ -67,12 +69,14 @@ class BotController extends Controller
 
         $request->validate([
             'token' => 'required|string',
-            'webhook_url' => 'required|url',
         ]);
+
+        // Generate webhook URL automatically
+        $webhookUrl = config('app.url') . '/api/telegram/webhook';
 
         $bot->update([
             'token' => $request->token,
-            'webhook_url' => $request->webhook_url,
+            'webhook_url' => $webhookUrl,
         ]);
 
         // Re-register webhook
