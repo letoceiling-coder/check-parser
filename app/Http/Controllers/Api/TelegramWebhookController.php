@@ -134,6 +134,12 @@ class TelegramWebhookController extends Controller
         // Send "processing" message
         $this->sendMessage($bot, $chatId, '⏳ Обрабатываю чек...');
 
+        Log::info('Processing photo', [
+            'chat_id' => $chatId,
+            'photo_sizes' => count($photo),
+            'sizes' => array_map(fn($p) => ['width' => $p['width'] ?? 0, 'height' => $p['height'] ?? 0, 'file_size' => $p['file_size'] ?? 0], $photo)
+        ]);
+
         try {
             // Try all photo sizes, starting from largest (best quality)
             // Telegram sends multiple sizes, try them all
@@ -142,44 +148,65 @@ class TelegramWebhookController extends Controller
             $checkData = null;
             $processedFiles = [];
 
-            foreach ($photoSizes as $photoSize) {
+            foreach ($photoSizes as $index => $photoSize) {
                 $fileId = $photoSize['file_id'];
+                $width = $photoSize['width'] ?? 0;
+                $height = $photoSize['height'] ?? 0;
+                
+                Log::info("Trying photo size {$index}", [
+                    'file_id' => substr($fileId, 0, 20) . '...',
+                    'width' => $width,
+                    'height' => $height
+                ]);
                 
                 // Get file from Telegram
                 $file = $this->getFile($bot, $fileId);
                 if (!$file) {
+                    Log::warning("Failed to get file for photo size {$index}");
                     continue;
                 }
 
                 // Download file
                 $filePath = $this->downloadFile($bot, $file['file_path']);
                 if (!$filePath) {
+                    Log::warning("Failed to download file for photo size {$index}");
                     continue;
                 }
 
+                Log::info("Downloaded file", ['path' => $filePath, 'size' => $file['file_size'] ?? 0]);
                 $processedFiles[] = $filePath;
 
                 // Preprocess image to improve QR recognition
                 $processedPath = $this->preprocessImage($filePath);
                 if ($processedPath) {
+                    Log::info("Image preprocessed", ['original' => $filePath, 'processed' => $processedPath]);
                     $processedFiles[] = $processedPath;
                     $filePath = $processedPath;
                 }
 
                 // Process check (QR code parsing) - try multiple methods
+                Log::info("Starting QR code extraction", ['file' => $filePath]);
                 $checkData = $this->processCheck($filePath);
                 
                 if ($checkData) {
+                    Log::info("QR code successfully extracted!", ['check_data' => $checkData]);
                     // Success! Clean up and return
                     foreach ($processedFiles as $pf) {
                         Storage::disk('local')->delete($pf);
                     }
                     $this->sendCheckResult($bot, $chatId, $checkData);
                     return;
+                } else {
+                    Log::warning("QR code extraction failed for photo size {$index}");
                 }
             }
 
             // If we get here, all attempts failed
+            Log::error("All QR code extraction attempts failed", [
+                'photo_sizes_tried' => count($photoSizes),
+                'files_processed' => count($processedFiles)
+            ]);
+            
             foreach ($processedFiles as $pf) {
                 Storage::disk('local')->delete($pf);
             }
@@ -187,7 +214,9 @@ class TelegramWebhookController extends Controller
             $this->sendMessage($bot, $chatId, '❌ Не удалось распознать QR код на чеке. Убедитесь, что фото четкое и QR код виден.');
         } catch (\Exception $e) {
             Log::error('Error processing photo: ' . $e->getMessage(), [
-                'trace' => $e->getTraceAsString()
+                'trace' => $e->getTraceAsString(),
+                'line' => $e->getLine(),
+                'file' => $e->getFile()
             ]);
             $this->sendMessage($bot, $chatId, '❌ Произошла ошибка при обработке чека.');
         }
@@ -486,24 +515,47 @@ class TelegramWebhookController extends Controller
     {
         try {
             $url = 'https://api.qrserver.com/v1/read-qr-code/';
+            $fileContents = file_get_contents($filePath);
+            $fileSize = strlen($fileContents);
+            
+            Log::debug('Trying API1 (qrserver.com)', [
+                'file_size' => $fileSize,
+                'file_path' => $filePath
+            ]);
             
             $response = Http::timeout(30)
-                ->attach('file', file_get_contents($filePath), basename($filePath))
+                ->attach('file', $fileContents, basename($filePath))
                 ->post($url);
+
+            Log::debug('API1 response', [
+                'status' => $response->status(),
+                'successful' => $response->successful(),
+                'body' => substr($response->body(), 0, 500)
+            ]);
 
             if ($response->successful()) {
                 $data = $response->json();
                 if (isset($data[0]['symbol'][0]['data'])) {
                     $qrData = $data[0]['symbol'][0]['data'];
                     if (!empty(trim($qrData))) {
+                        Log::info('API1 success', ['qr_data_length' => strlen($qrData)]);
                         return $qrData;
                     }
                 }
+                // Check for errors in response
+                if (isset($data[0]['symbol'][0]['error'])) {
+                    Log::warning('API1 error', ['error' => $data[0]['symbol'][0]['error']]);
+                }
+            } else {
+                Log::warning('API1 request failed', [
+                    'status' => $response->status(),
+                    'body' => substr($response->body(), 0, 200)
+                ]);
             }
 
             return null;
         } catch (\Exception $e) {
-            Log::debug('API1 (qrserver) failed: ' . $e->getMessage());
+            Log::warning('API1 (qrserver) exception: ' . $e->getMessage());
             return null;
         }
     }
