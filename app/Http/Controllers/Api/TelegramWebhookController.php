@@ -1641,99 +1641,112 @@ PYTHON;
                 }
             }
             
+            // ---- Amount extraction with scoring (prevents picking INN/account numbers) ----
             $amount = null;
-            
-            // Priority patterns - these are most reliable
-            // Use \s* to match any whitespace including newlines between keyword and amount
-            $priorityPatterns = [
-                // "Итого: 550 ₽" or "Итого 550 ₽" or "Итого\n550 е" or "Итого 10 000 ₽"
-                '/итого[:\s]*(\d{1,3}(?:\s+\d{3})*(?:[\.,]\d{2})?)\s*[₽рубрpе]/ui',
-                // "Сумма: 550 ₽" or "Сумма 550 ₽" or "Сумма\n550 е" or "Сумма 10 000 ₽"
-                '/сумма[:\s]*(\d{1,3}(?:\s+\d{3})*(?:[\.,]\d{2})?)\s*[₽рубрpе]/ui',
-                // "К оплате: 550 ₽"
-                '/к\s+оплате[:\s]*(\d{1,3}(?:\s+\d{3})*(?:[\.,]\d{2})?)\s*[₽рубрpе]/ui',
-                // "Всего: 550 ₽"
-                '/всего[:\s]*(\d{1,3}(?:\s+\d{3})*(?:[\.,]\d{2})?)\s*[₽рубрpе]/ui',
+
+            $keywords = ['итого', 'сумма', 'к оплате', 'всего'];
+            $badContextWords = [
+                'инн', 'бик', 'кпп', 'огрн', 'р/с', 'счет', 'счёт', 'карта',
+                'идентификатор', 'операц', 'сбп', 'телефон', 'получател', 'отправител',
             ];
-            
-            // Try priority patterns first
-            foreach ($priorityPatterns as $index => $pattern) {
-                if (preg_match($pattern, $textLower, $matches)) {
-                    // Remove spaces from number (e.g., "10 000" -> "10000")
-                    $amountStr = preg_replace('/\s+/', '', $matches[1]);
-                    $amountStr = str_replace(',', '.', $amountStr);
-                    $amount = (float) $amountStr;
-                    
-                    // Validate amount (should be reasonable for Russian receipts)
-                    if ($amount >= 1 && $amount <= 1000000) {
-                        Log::info('Amount found using priority pattern', [
-                            'pattern_index' => $index,
-                            'pattern' => $pattern,
-                            'amount' => $amount,
-                            'match' => $matches[0],
-                            'raw_match' => $matches[1]
-                        ]);
-                        break;
-                    } else {
-                        Log::debug('Amount found but invalid', ['amount' => $amount]);
-                        $amount = null;
+
+            // Find all numeric candidates (with optional thousands separators and decimals)
+            if (preg_match_all('/\d{1,3}(?:\s+\d{3})*(?:[.,]\d{2})?|\d{3,12}/u', $text, $numMatches, PREG_OFFSET_CAPTURE)) {
+                $candidates = [];
+
+                foreach ($numMatches[0] as [$rawNum, $pos]) {
+                    $rawNumTrim = trim($rawNum);
+
+                    // Skip obvious dates (02.02, 03.02.2026, 03022016)
+                    if (preg_match('/^\d{1,2}[.\/]\d{1,2}([.\/]\d{2,4})?$/u', $rawNumTrim)) {
+                        continue;
                     }
-                }
-            }
-            
-            // If priority patterns didn't work, try fallback patterns
-            if ($amount === null) {
-                $fallbackPatterns = [
-                    // Numbers with currency symbol (₽, руб, P, р, е) - more flexible spacing
-                    '/(\d{1,3}(?:\s+\d{3})*(?:[\.,]\d{2})?)\s*[₽рубрpе]/ui',
-                    // "550 е" pattern (common OCR error - "е" instead of "₽")
-                    '/(\d{1,3}(?:\s+\d{3})*(?:[\.,]\d{2})?)\s*е\b/ui',
-                    // "550 P" pattern (common in receipts)
-                    '/(\d{1,3}(?:\s+\d{3})*(?:[\.,]\d{2})?)\s+p\b/ui',
-                    // Just numbers that look like amounts (3-6 digits, not dates)
-                    '/(\d{3,6}(?:[\.,]\d{2})?)(?!\s*[\.\/]\d)/u', // Not followed by date pattern
-                ];
-                
-                foreach ($fallbackPatterns as $index => $pattern) {
-                    // Find all matches and pick the largest reasonable one
-                    if (preg_match_all($pattern, $textLower, $allMatches, PREG_SET_ORDER)) {
-                        $candidates = [];
-                        foreach ($allMatches as $match) {
-                            $amountStr = preg_replace('/\s+/', '', $match[1]);
-                            $amountStr = str_replace(',', '.', $amountStr);
-                            $candidateAmount = (float) $amountStr;
-                            
-                            // Validate - should be reasonable and not look like a date
-                            if ($candidateAmount >= 1 && $candidateAmount <= 1000000) {
-                                // Exclude if it looks like a date (e.g., 02.02, 03.02, 03022016)
-                                $rawMatch = $match[1];
-                                if (!preg_match('/^\d{1,2}\.?\d{1,2}$/', $rawMatch) && 
-                                    !preg_match('/^\d{8}$/', $rawMatch) && // Not 8-digit date
-                                    $candidateAmount >= 10) { // Minimum reasonable amount
-                                    $candidates[] = [
-                                        'amount' => $candidateAmount,
-                                        'raw' => $rawMatch,
-                                        'match' => $match[0]
-                                    ];
-                                }
-                            }
-                        }
-                        
-                        if (!empty($candidates)) {
-                            // Pick the largest amount (most likely the total)
-                            usort($candidates, function($a, $b) {
-                                return $b['amount'] <=> $a['amount'];
-                            });
-                            $amount = $candidates[0]['amount'];
-                            Log::info('Amount found using fallback pattern', [
-                                'pattern_index' => $index,
-                                'pattern' => $pattern,
-                                'amount' => $amount,
-                                'top_candidates' => array_slice($candidates, 0, 3)
-                            ]);
+                    if (preg_match('/^\d{8}$/u', $rawNumTrim)) {
+                        continue;
+                    }
+
+                    // Normalize number
+                    $normalized = preg_replace('/\s+/', '', $rawNumTrim);
+                    $normalized = str_replace(',', '.', $normalized);
+
+                    if (!is_numeric($normalized)) {
+                        continue;
+                    }
+
+                    $val = (float) $normalized;
+                    if ($val < 1 || $val > 1000000) {
+                        continue;
+                    }
+
+                    // Context window around number
+                    $winStart = max(0, $pos - 80);
+                    $winLen = min(strlen($text) - $winStart, 160);
+                    $context = mb_strtolower(substr($text, $winStart, $winLen), 'UTF-8');
+
+                    // Reject if near known non-amount fields
+                    $isBad = false;
+                    foreach ($badContextWords as $w) {
+                        if (str_contains($context, $w)) {
+                            $isBad = true;
                             break;
                         }
                     }
+                    if ($isBad) {
+                        continue;
+                    }
+
+                    // Currency proximity (₽/руб/р/p/е). OCR often returns "е" for ₽.
+                    $after = mb_strtolower(substr($text, $pos, 25), 'UTF-8');
+                    $before = mb_strtolower(substr($text, max(0, $pos - 25), 25), 'UTF-8');
+                    $hasCurrency = (bool) preg_match('/(₽|руб|р\b|p\b|е\b)/u', $after) || (bool) preg_match('/(₽|руб|р\b|p\b|е\b)/u', $before);
+
+                    // Keyword proximity scoring
+                    $score = 0;
+                    if ($hasCurrency) {
+                        $score += 3;
+                    }
+                    foreach ($keywords as $kw) {
+                        if (str_contains($context, $kw)) {
+                            $score += 5;
+                        }
+                    }
+
+                    // Prefer “round-ish” receipt totals (no 10+ digits, not a bank account prefix)
+                    if ($val >= 10) {
+                        $score += 1;
+                    }
+                    if (preg_match('/^\d{6,}$/u', $normalized) && !$hasCurrency) {
+                        // large raw number without currency is suspicious (like INN/account)
+                        $score -= 4;
+                    }
+
+                    $candidates[] = [
+                        'amount' => $val,
+                        'raw' => $rawNumTrim,
+                        'pos' => $pos,
+                        'score' => $score,
+                        'has_currency' => $hasCurrency,
+                    ];
+                }
+
+                if (!empty($candidates)) {
+                    usort($candidates, function ($a, $b) {
+                        // score desc, then amount desc
+                        $cmp = ($b['score'] <=> $a['score']);
+                        if ($cmp !== 0) return $cmp;
+                        return $b['amount'] <=> $a['amount'];
+                    });
+
+                    $best = $candidates[0];
+                    $amount = $best['amount'];
+
+                    Log::info('Amount selected by scoring', [
+                        'amount' => $amount,
+                        'raw' => $best['raw'],
+                        'score' => $best['score'],
+                        'has_currency' => $best['has_currency'],
+                        'top3' => array_slice($candidates, 0, 3),
+                    ]);
                 }
             }
 
