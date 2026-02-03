@@ -6,8 +6,10 @@ use App\Http\Controllers\Controller;
 use App\Models\TelegramBot;
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
-use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
+use LetoceilingCoder\Telegram\Bot;
+use LetoceilingCoder\Telegram\Exceptions\TelegramException;
+use LetoceilingCoder\Telegram\Exceptions\TelegramValidationException;
 
 class BotController extends Controller
 {
@@ -51,17 +53,17 @@ class BotController extends Controller
         // Generate webhook URL automatically
         $webhookUrl = config('app.url') . '/api/telegram/webhook';
 
-        $bot = TelegramBot::create([
+        $telegramBot = TelegramBot::create([
             'user_id' => $request->user()->id,
             'token' => $request->token,
             'webhook_url' => $webhookUrl,
             'is_active' => true,
         ]);
 
-        // Register webhook automatically
-        $this->registerWebhook($bot);
+        // Register webhook automatically using package
+        $this->registerWebhook($telegramBot);
 
-        return response()->json($bot, 201);
+        return response()->json($telegramBot, 201);
     }
 
     /**
@@ -69,7 +71,7 @@ class BotController extends Controller
      */
     public function update(Request $request, int $id): JsonResponse
     {
-        $bot = TelegramBot::where('user_id', $request->user()->id)
+        $telegramBot = TelegramBot::where('user_id', $request->user()->id)
             ->where('id', $id)
             ->firstOrFail();
 
@@ -80,15 +82,15 @@ class BotController extends Controller
         // Generate webhook URL automatically
         $webhookUrl = config('app.url') . '/api/telegram/webhook';
 
-        $bot->update([
+        $telegramBot->update([
             'token' => $request->token,
             'webhook_url' => $webhookUrl,
         ]);
 
         // Re-register webhook
-        $this->registerWebhook($bot);
+        $this->registerWebhook($telegramBot);
 
-        return response()->json($bot);
+        return response()->json($telegramBot);
     }
 
     /**
@@ -96,7 +98,7 @@ class BotController extends Controller
      */
     public function updateSettings(Request $request, int $id): JsonResponse
     {
-        $bot = TelegramBot::where('user_id', $request->user()->id)
+        $telegramBot = TelegramBot::where('user_id', $request->user()->id)
             ->where('id', $id)
             ->firstOrFail();
 
@@ -104,51 +106,53 @@ class BotController extends Controller
             'welcome_message' => 'nullable|string|max:4000',
         ]);
 
-        $bot->update([
+        $telegramBot->update([
             'welcome_message' => $request->welcome_message,
         ]);
 
         return response()->json([
             'message' => 'Настройки сохранены',
-            'welcome_message' => $bot->welcome_message,
-            'welcome_message_display' => $bot->getWelcomeMessageText(),
+            'welcome_message' => $telegramBot->welcome_message,
+            'welcome_message_display' => $telegramBot->getWelcomeMessageText(),
         ]);
     }
 
     /**
-     * Get bot description from Telegram API
+     * Get bot description from Telegram API using package
      */
     public function getDescription(Request $request, int $id): JsonResponse
     {
-        $bot = TelegramBot::where('user_id', $request->user()->id)
+        $telegramBot = TelegramBot::where('user_id', $request->user()->id)
             ->where('id', $id)
             ->firstOrFail();
 
         try {
-            // Получаем описание бота
-            $descResponse = Http::timeout(10)
-                ->get("https://api.telegram.org/bot{$bot->token}/getMyDescription");
+            $bot = new Bot($telegramBot->token);
             
-            $shortDescResponse = Http::timeout(10)
-                ->get("https://api.telegram.org/bot{$bot->token}/getMyShortDescription");
+            // Получаем описание бота через пакет
+            $descResponse = $bot->getMyDescription();
+            $shortDescResponse = $bot->getMyShortDescription();
 
             $description = '';
             $shortDescription = '';
 
-            if ($descResponse->successful()) {
-                $data = $descResponse->json();
-                $description = $data['result']['description'] ?? '';
+            if (isset($descResponse['ok']) && $descResponse['ok']) {
+                $description = $descResponse['result']['description'] ?? '';
             }
 
-            if ($shortDescResponse->successful()) {
-                $data = $shortDescResponse->json();
-                $shortDescription = $data['result']['short_description'] ?? '';
+            if (isset($shortDescResponse['ok']) && $shortDescResponse['ok']) {
+                $shortDescription = $shortDescResponse['result']['short_description'] ?? '';
             }
 
             return response()->json([
                 'description' => $description,
                 'short_description' => $shortDescription,
             ]);
+        } catch (TelegramException $e) {
+            Log::error('Error getting bot description: ' . $e->getMessage());
+            return response()->json([
+                'error' => 'Ошибка получения описания: ' . $e->getMessage(),
+            ], 500);
         } catch (\Exception $e) {
             Log::error('Error getting bot description: ' . $e->getMessage());
             return response()->json([
@@ -158,11 +162,11 @@ class BotController extends Controller
     }
 
     /**
-     * Update bot description via Telegram API
+     * Update bot description via Telegram API using package
      */
     public function updateDescription(Request $request, int $id): JsonResponse
     {
-        $bot = TelegramBot::where('user_id', $request->user()->id)
+        $telegramBot = TelegramBot::where('user_id', $request->user()->id)
             ->where('id', $id)
             ->firstOrFail();
 
@@ -175,33 +179,35 @@ class BotController extends Controller
         $success = [];
 
         try {
-            // Устанавливаем описание (показывается в пустом чате)
-            if ($request->has('description')) {
-                $response = Http::timeout(10)
-                    ->post("https://api.telegram.org/bot{$bot->token}/setMyDescription", [
-                        'description' => $request->description ?: '',
-                    ]);
+            $bot = new Bot($telegramBot->token);
 
-                if ($response->successful() && $response->json()['ok']) {
-                    $success[] = 'Описание бота обновлено';
-                } else {
-                    $errorData = $response->json();
-                    $errors[] = 'Ошибка описания: ' . ($errorData['description'] ?? 'Unknown');
+            // Устанавливаем описание (показывается в пустом чате) через пакет
+            if ($request->has('description')) {
+                try {
+                    $response = $bot->setMyDescription($request->description ?: null);
+                    
+                    if (isset($response['ok']) && $response['ok']) {
+                        $success[] = 'Описание бота обновлено';
+                    } else {
+                        $errors[] = 'Ошибка описания: ' . ($response['description'] ?? 'Unknown');
+                    }
+                } catch (TelegramValidationException $e) {
+                    $errors[] = 'Ошибка валидации описания: ' . $e->getMessage();
                 }
             }
 
-            // Устанавливаем краткое описание (в профиле)
+            // Устанавливаем краткое описание (в профиле) через пакет
             if ($request->has('short_description')) {
-                $response = Http::timeout(10)
-                    ->post("https://api.telegram.org/bot{$bot->token}/setMyShortDescription", [
-                        'short_description' => $request->short_description ?: '',
-                    ]);
-
-                if ($response->successful() && $response->json()['ok']) {
-                    $success[] = 'Краткое описание обновлено';
-                } else {
-                    $errorData = $response->json();
-                    $errors[] = 'Ошибка краткого описания: ' . ($errorData['description'] ?? 'Unknown');
+                try {
+                    $response = $bot->setMyShortDescription($request->short_description ?: null);
+                    
+                    if (isset($response['ok']) && $response['ok']) {
+                        $success[] = 'Краткое описание обновлено';
+                    } else {
+                        $errors[] = 'Ошибка краткого описания: ' . ($response['description'] ?? 'Unknown');
+                    }
+                } catch (TelegramValidationException $e) {
+                    $errors[] = 'Ошибка валидации краткого описания: ' . $e->getMessage();
                 }
             }
 
@@ -215,6 +221,11 @@ class BotController extends Controller
             return response()->json([
                 'message' => implode('. ', $success) ?: 'Описание обновлено',
             ]);
+        } catch (TelegramException $e) {
+            Log::error('Error updating bot description: ' . $e->getMessage());
+            return response()->json([
+                'error' => 'Ошибка Telegram: ' . $e->getMessage(),
+            ], 500);
         } catch (\Exception $e) {
             Log::error('Error updating bot description: ' . $e->getMessage());
             return response()->json([
@@ -224,51 +235,47 @@ class BotController extends Controller
     }
 
     /**
-     * Test webhook
+     * Test webhook using package
      */
     public function testWebhook(Request $request, int $id): JsonResponse
     {
-        $bot = TelegramBot::where('user_id', $request->user()->id)
+        $telegramBot = TelegramBot::where('user_id', $request->user()->id)
             ->where('id', $id)
             ->firstOrFail();
 
         try {
-            // First, get bot info to verify token is valid
-            $botInfoResponse = Http::timeout(10)
-                ->get("https://api.telegram.org/bot{$bot->token}/getMe");
+            $bot = new Bot($telegramBot->token);
+            
+            // Получаем информацию о боте через пакет
+            $botInfoResponse = $bot->getMe();
 
-            if (!$botInfoResponse->successful()) {
-                $errorData = $botInfoResponse->json();
+            if (!isset($botInfoResponse['ok']) || !$botInfoResponse['ok']) {
                 return response()->json([
                     'message' => 'Invalid bot token or bot not found',
-                    'error' => $errorData['description'] ?? 'Unknown error',
+                    'error' => $botInfoResponse['description'] ?? 'Unknown error',
                 ], 400);
             }
 
-            $botInfo = $botInfoResponse->json();
-            $botUsername = $botInfo['result']['username'] ?? 'unknown';
+            $botUsername = $botInfoResponse['result']['username'] ?? 'unknown';
 
             // Try to send test message to the user who created the bot
-            // Note: This will only work if the user has started a conversation with the bot
             $chatId = $request->user()->id;
             
-            $response = Http::timeout(10)
-                ->post("https://api.telegram.org/bot{$bot->token}/sendMessage", [
-                    'chat_id' => $chatId,
-                    'text' => '✅ Тестовое сообщение от бота! Webhook работает корректно.',
-                ]);
+            try {
+                $response = $bot->sendMessage($chatId, '✅ Тестовое сообщение от бота! Webhook работает корректно.');
 
-            if ($response->successful()) {
-                return response()->json([
-                    'message' => 'Webhook test successful! Check your Telegram bot (@' . $botUsername . ').',
-                    'bot_username' => $botUsername,
-                    'response' => $response->json(),
-                ]);
+                if (isset($response['ok']) && $response['ok']) {
+                    return response()->json([
+                        'message' => 'Webhook test successful! Check your Telegram bot (@' . $botUsername . ').',
+                        'bot_username' => $botUsername,
+                        'response' => $response,
+                    ]);
+                }
+
+                $errorDescription = $response['description'] ?? 'Unknown error';
+            } catch (TelegramException $e) {
+                $errorDescription = $e->getMessage();
             }
-
-            // If sending message failed, check the error
-            $errorData = $response->json();
-            $errorDescription = $errorData['description'] ?? 'Unknown error';
             
             // Common error: user hasn't started conversation with bot
             if (str_contains($errorDescription, 'chat not found') || str_contains($errorDescription, 'bot was blocked')) {
@@ -282,13 +289,11 @@ class BotController extends Controller
             return response()->json([
                 'message' => 'Webhook test failed: ' . $errorDescription,
                 'bot_username' => $botUsername,
-                'error' => $errorData,
             ], 400);
-        } catch (\Illuminate\Http\Client\ConnectionException $e) {
-            Log::error('Webhook test connection error: ' . $e->getMessage());
+        } catch (TelegramException $e) {
+            Log::error('Webhook test error: ' . $e->getMessage());
             return response()->json([
-                'message' => 'Connection error: Unable to reach Telegram API',
-                'error' => $e->getMessage(),
+                'message' => 'Telegram error: ' . $e->getMessage(),
             ], 500);
         } catch (\Exception $e) {
             Log::error('Webhook test error: ' . $e->getMessage());
@@ -299,22 +304,21 @@ class BotController extends Controller
     }
 
     /**
-     * Register webhook with Telegram
+     * Register webhook with Telegram using package
      */
-    private function registerWebhook(TelegramBot $bot): void
+    private function registerWebhook(TelegramBot $telegramBot): void
     {
         try {
-            $response = Http::post("https://api.telegram.org/bot{$bot->token}/setWebhook", [
-                'url' => $bot->webhook_url,
-            ]);
+            $bot = new Bot($telegramBot->token);
+            $response = $bot->setWebhook($telegramBot->webhook_url);
 
-            if ($response->successful()) {
-                Log::info("Webhook registered for bot {$bot->id}: {$bot->webhook_url}");
+            if (isset($response['ok']) && $response['ok']) {
+                Log::info("Webhook registered for bot {$telegramBot->id}: {$telegramBot->webhook_url}");
             } else {
-                Log::error("Failed to register webhook for bot {$bot->id}: " . $response->body());
+                Log::error("Failed to register webhook for bot {$telegramBot->id}: " . json_encode($response));
             }
         } catch (\Exception $e) {
-            Log::error("Error registering webhook for bot {$bot->id}: " . $e->getMessage());
+            Log::error("Error registering webhook for bot {$telegramBot->id}: " . $e->getMessage());
         }
     }
 }
