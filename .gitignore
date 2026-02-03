@@ -18,10 +18,6 @@
 /public/build
 /public/hot
 /public/storage
-/public/static
-/public/index.html
-/public/asset-manifest.json
-/public/manifest.json
 /storage/*.key
 /storage/pail
 /vendor
