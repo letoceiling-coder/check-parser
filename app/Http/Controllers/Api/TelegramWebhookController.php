@@ -1629,39 +1629,85 @@ PYTHON;
             
             // Extract date first to exclude it from amount search
             $date = null;
-            $datePatterns = [
-                '/(\d{2})[\.\/](\d{2})[\.\/](\d{4})\s+(\d{2}):(\d{2}):(\d{2})/u', // 03.02.2026 10:14:31
-                '/(\d{2})[\.\/](\d{2})[\.\/](\d{4})/u', // 03.02.2026
-                '/(\d{4})[\.\/-](\d{2})[\.\/-](\d{2})/u', // 2026-02-03
+            
+            // Russian month names mapping
+            $russianMonths = [
+                'января' => '01', 'январь' => '01', 'янв' => '01',
+                'февраля' => '02', 'февраль' => '02', 'фев' => '02',
+                'марта' => '03', 'март' => '03', 'мар' => '03',
+                'апреля' => '04', 'апрель' => '04', 'апр' => '04',
+                'мая' => '05', 'май' => '05',
+                'июня' => '06', 'июнь' => '06', 'июн' => '06',
+                'июля' => '07', 'июль' => '07', 'июл' => '07',
+                'августа' => '08', 'август' => '08', 'авг' => '08',
+                'сентября' => '09', 'сентябрь' => '09', 'сен' => '09',
+                'октября' => '10', 'октябрь' => '10', 'окт' => '10',
+                'ноября' => '11', 'ноябрь' => '11', 'ноя' => '11',
+                'декабря' => '12', 'декабрь' => '12', 'дек' => '12',
             ];
+            
+            // Try Russian month format first: "3 февраля 2026 в 14:38" or "3 февраля 2026"
+            $monthPattern = implode('|', array_keys($russianMonths));
+            
+            // Pattern: "3 февраля 2026 в 14:38" or "3 февраля 2026 14:38:00"
+            if (preg_match('/(\d{1,2})\s+(' . $monthPattern . ')\s+(\d{4})(?:\s+(?:в\s+)?(\d{1,2}):(\d{2})(?::(\d{2}))?)?/ui', $text, $matches)) {
+                $day = str_pad($matches[1], 2, '0', STR_PAD_LEFT);
+                $monthName = mb_strtolower($matches[2], 'UTF-8');
+                $month = $russianMonths[$monthName] ?? '01';
+                $year = $matches[3];
+                
+                $dateStr = "{$year}-{$month}-{$day}";
+                
+                if (isset($matches[4]) && isset($matches[5])) {
+                    $hour = str_pad($matches[4], 2, '0', STR_PAD_LEFT);
+                    $minute = $matches[5];
+                    $dateStr .= " {$hour}:{$minute}";
+                    if (isset($matches[6])) {
+                        $dateStr .= ":{$matches[6]}";
+                    }
+                }
+                
+                $date = $dateStr;
+                Log::debug('Parsed Russian month date', ['date' => $date, 'match' => $matches[0]]);
+            }
+            
+            // If no date found, try numeric patterns
+            if (!$date) {
+                $datePatterns = [
+                    '/(\d{2})[\.\/](\d{2})[\.\/](\d{4})\s+(\d{2}):(\d{2}):(\d{2})/u', // 03.02.2026 10:14:31
+                    '/(\d{2})[\.\/](\d{2})[\.\/](\d{4})\s+(\d{2}):(\d{2})/u', // 03.02.2026 10:14
+                    '/(\d{2})[\.\/](\d{2})[\.\/](\d{4})/u', // 03.02.2026
+                    '/(\d{4})[\.\/-](\d{2})[\.\/-](\d{2})/u', // 2026-02-03
+                ];
 
-            foreach ($datePatterns as $pattern) {
-                if (preg_match($pattern, $text, $matches)) {
-                    try {
-                        if (count($matches) >= 4) {
-                            if (strlen($matches[1]) === 4) {
-                                // YYYY-MM-DD format
-                                $dateStr = "{$matches[1]}-{$matches[2]}-{$matches[3]}";
-                            } else {
-                                // DD.MM.YYYY format
-                                $dateStr = "{$matches[3]}-{$matches[2]}-{$matches[1]}";
-                            }
-                            
-                            if (isset($matches[4]) && isset($matches[5])) {
-                                $dateStr .= " {$matches[4]}:{$matches[5]}";
-                                if (isset($matches[6])) {
-                                    $dateStr .= ":{$matches[6]}";
+                foreach ($datePatterns as $pattern) {
+                    if (preg_match($pattern, $text, $matches)) {
+                        try {
+                            if (count($matches) >= 4) {
+                                if (strlen($matches[1]) === 4) {
+                                    // YYYY-MM-DD format
+                                    $dateStr = "{$matches[1]}-{$matches[2]}-{$matches[3]}";
+                                } else {
+                                    // DD.MM.YYYY format
+                                    $dateStr = "{$matches[3]}-{$matches[2]}-{$matches[1]}";
                                 }
+                                
+                                if (isset($matches[4]) && isset($matches[5])) {
+                                    $dateStr .= " {$matches[4]}:{$matches[5]}";
+                                    if (isset($matches[6])) {
+                                        $dateStr .= ":{$matches[6]}";
+                                    }
+                                }
+                                
+                                $date = $dateStr;
+                                // Remove date from text to avoid matching it as amount
+                                $text = preg_replace($pattern, '', $text);
+                                $textLower = mb_strtolower($text, 'UTF-8');
+                                break;
                             }
-                            
-                            $date = $dateStr;
-                            // Remove date from text to avoid matching it as amount
-                            $text = preg_replace($pattern, '', $text);
-                            $textLower = mb_strtolower($text, 'UTF-8');
-                            break;
+                        } catch (\Exception $e) {
+                            continue;
                         }
-                    } catch (\Exception $e) {
-                        continue;
                     }
                 }
             }
