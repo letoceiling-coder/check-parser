@@ -357,11 +357,13 @@ class TelegramWebhookController extends Controller
             }
 
             // Try multiple OCR methods
+            // Tesseract first (if installed) - local, fast, no API limits
+            // Then external APIs as fallback
             $ocrMethods = [
-                'extractTextWithYandexVision',
-                'extractTextWithOCRspace',
-                'extractTextWithTesseract',
-                'extractTextWithGoogleVision',
+                'extractTextWithTesseract',      // Local - fastest, no limits
+                'extractTextWithYandexVision',   // Good for Russian text
+                'extractTextWithOCRspace',       // Free but may timeout
+                'extractTextWithGoogleVision',  // Paid but reliable
             ];
 
             $extractedText = null;
@@ -1336,24 +1338,70 @@ PYTHON;
             // Check if tesseract is available
             $tesseractPath = exec('which tesseract 2>/dev/null');
             if (!$tesseractPath) {
-                Log::debug('Tesseract not found');
+                Log::debug('Tesseract not found - install with: sudo apt-get install tesseract-ocr tesseract-ocr-rus');
                 return null;
+            }
+
+            Log::info('Using Tesseract OCR', [
+                'tesseract_path' => $tesseractPath,
+                'file' => $filePath,
+                'file_size' => filesize($filePath)
+            ]);
+
+            // Check if Russian language is available
+            $langsOutput = exec('tesseract --list-langs 2>&1', $langsArray, $langsReturnCode);
+            $hasRussian = false;
+            if ($langsReturnCode === 0) {
+                foreach ($langsArray as $line) {
+                    if (trim($line) === 'rus') {
+                        $hasRussian = true;
+                        break;
+                    }
+                }
+            }
+
+            if (!$hasRussian) {
+                Log::warning('Russian language not found for Tesseract. Install with: sudo apt-get install tesseract-ocr-rus');
+                // Try without language specification
+                $langParam = '';
+            } else {
+                $langParam = '-l rus';
             }
 
             // Run tesseract with Russian language
             $outputPath = sys_get_temp_dir() . '/tesseract_' . uniqid();
-            $command = "tesseract {$filePath} {$outputPath} -l rus 2>/dev/null";
+            $command = "tesseract " . escapeshellarg($filePath) . " " . escapeshellarg($outputPath) . " {$langParam} 2>&1";
+            
+            Log::debug('Running Tesseract command', ['command' => $command]);
+            
             exec($command, $output, $returnCode);
 
             if ($returnCode === 0 && file_exists($outputPath . '.txt')) {
                 $text = file_get_contents($outputPath . '.txt');
                 unlink($outputPath . '.txt');
-                return !empty(trim($text)) ? trim($text) : null;
+                
+                if (!empty(trim($text))) {
+                    Log::info('Tesseract extracted text successfully', [
+                        'text_length' => strlen($text),
+                        'text_preview' => substr($text, 0, 200)
+                    ]);
+                    return trim($text);
+                } else {
+                    Log::debug('Tesseract returned empty text');
+                }
+            } else {
+                Log::warning('Tesseract failed', [
+                    'return_code' => $returnCode,
+                    'output' => implode("\n", $output),
+                    'output_file_exists' => file_exists($outputPath . '.txt')
+                ]);
             }
 
             return null;
         } catch (\Exception $e) {
-            Log::debug('Tesseract OCR failed: ' . $e->getMessage());
+            Log::error('Tesseract OCR exception: ' . $e->getMessage(), [
+                'trace' => substr($e->getTraceAsString(), 0, 500)
+            ]);
             return null;
         }
     }
