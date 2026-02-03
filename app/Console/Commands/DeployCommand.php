@@ -89,7 +89,9 @@ class DeployCommand extends Command
         $this->info('Triggering deployment on server...');
         
         try {
-            $response = Http::withHeaders([
+            $response = Http::withOptions([
+                'verify' => false, // Отключить проверку SSL сертификата
+            ])->withHeaders([
                 'Authorization' => 'Bearer ' . $deployToken,
                 'Accept' => 'application/json',
             ])->post($deployUrl . '/api/deploy');
