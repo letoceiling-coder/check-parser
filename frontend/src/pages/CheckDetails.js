@@ -219,7 +219,7 @@ function CheckDetails() {
             </h2>
             {check.file_path && (
               <a
-                href={`${API_URL}/api/checks/${id}/file`}
+                href={`${API_URL}/api/checks/${id}/file?token=${token}`}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="text-blue-600 hover:text-blue-800 text-sm"
@@ -279,7 +279,7 @@ function CheckDetails() {
                       </div>
                       <TransformComponent wrapperClass="w-full" contentClass="w-full flex justify-center">
                         <img
-                          src={`${API_URL}/api/checks/${id}/file`}
+                          src={`${API_URL}/api/checks/${id}/file?token=${token}`}
                           alt="Чек"
                           className="max-w-full max-h-[600px] object-contain rounded shadow"
                           onError={(e) => {
