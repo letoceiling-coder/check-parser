@@ -10,6 +10,10 @@ Route::post('/deploy', [DeployController::class, 'deploy']);
 // Telegram webhook (public, no auth required)
 Route::post('/telegram/webhook', [\App\Http\Controllers\Api\TelegramWebhookController::class, 'handle']);
 
+// Public API for OCR analysis and optimization
+Route::get('/checks/problems', [\App\Http\Controllers\Api\CheckController::class, 'problems']);
+Route::get('/checks/analyze/{id}', [\App\Http\Controllers\Api\CheckController::class, 'analyze']);
+
 // Auth routes
 Route::post('/login', [AuthController::class, 'login']);
 Route::middleware('auth:sanctum')->group(function () {

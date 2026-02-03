@@ -164,4 +164,221 @@ class CheckController extends Controller
             'Access-Control-Allow-Origin' => '*',
         ]);
     }
+
+    /**
+     * Получить проблемные чеки для анализа (публичный API для оптимизации)
+     * GET /api/checks/problems
+     * 
+     * Возвращает чеки со статусом 'failed' или 'partial',
+     * а также чеки без суммы или без даты
+     */
+    public function problems(Request $request): JsonResponse
+    {
+        $query = Check::query()
+            ->where(function ($q) {
+                $q->where('status', 'failed')
+                  ->orWhere('status', 'partial')
+                  ->orWhereNull('amount')
+                  ->orWhere('amount_found', false)
+                  ->orWhere('date_found', false);
+            })
+            ->orderBy('created_at', 'desc');
+
+        // Опциональный лимит
+        $limit = $request->get('limit', 50);
+        
+        $checks = $query->take($limit)->get()->map(function ($check) {
+            return [
+                'id' => $check->id,
+                'created_at' => $check->created_at->format('Y-m-d H:i:s'),
+                'status' => $check->status,
+                'file_type' => $check->file_type,
+                'username' => $check->username,
+                'first_name' => $check->first_name,
+                'chat_id' => $check->chat_id,
+                
+                // Результаты распознавания
+                'amount' => $check->amount,
+                'amount_found' => $check->amount_found,
+                'check_date' => $check->check_date,
+                'date_found' => $check->date_found,
+                
+                // OCR информация для анализа
+                'ocr_method' => $check->ocr_method,
+                'text_length' => $check->text_length,
+                'readable_ratio' => $check->readable_ratio,
+                'raw_text' => $check->raw_text,
+                
+                // Проблемы
+                'problems' => $this->identifyProblems($check),
+                
+                // Ссылки для анализа
+                'detail_url' => url("/api/checks/analyze/{$check->id}"),
+                'admin_url' => url("/checks/{$check->id}"),
+            ];
+        });
+
+        return response()->json([
+            'total_problems' => $checks->count(),
+            'summary' => [
+                'failed' => $checks->where('status', 'failed')->count(),
+                'partial' => $checks->where('status', 'partial')->count(),
+                'no_amount' => $checks->where('amount_found', false)->count(),
+                'no_date' => $checks->where('date_found', false)->count(),
+            ],
+            'checks' => $checks,
+        ]);
+    }
+
+    /**
+     * Детальный анализ конкретного чека (публичный API)
+     * GET /api/checks/analyze/{id}
+     */
+    public function analyze(int $id): JsonResponse
+    {
+        $check = Check::findOrFail($id);
+        
+        $analysis = [
+            'id' => $check->id,
+            'created_at' => $check->created_at->format('Y-m-d H:i:s'),
+            'status' => $check->status,
+            
+            // Информация о файле
+            'file' => [
+                'type' => $check->file_type,
+                'size' => $check->file_size,
+                'path' => $check->file_path,
+                'exists' => $check->file_path && Storage::disk('local')->exists($check->file_path),
+            ],
+            
+            // Отправитель
+            'sender' => [
+                'username' => $check->username,
+                'first_name' => $check->first_name,
+                'chat_id' => $check->chat_id,
+            ],
+            
+            // Результаты распознавания
+            'recognition' => [
+                'amount' => $check->amount,
+                'amount_found' => $check->amount_found,
+                'corrected_amount' => $check->corrected_amount,
+                'check_date' => $check->check_date,
+                'date_found' => $check->date_found,
+                'corrected_date' => $check->corrected_date,
+                'currency' => $check->currency,
+            ],
+            
+            // OCR информация
+            'ocr' => [
+                'method' => $check->ocr_method,
+                'text_length' => $check->text_length,
+                'readable_ratio' => $check->readable_ratio,
+                'raw_text' => $check->raw_text,
+            ],
+            
+            // Выявленные проблемы
+            'problems' => $this->identifyProblems($check),
+            
+            // Рекомендации по исправлению
+            'recommendations' => $this->getRecommendations($check),
+            
+            // Заметки администратора
+            'admin_notes' => $check->admin_notes,
+        ];
+
+        return response()->json($analysis);
+    }
+
+    /**
+     * Идентифицировать проблемы с чеком
+     */
+    private function identifyProblems(Check $check): array
+    {
+        $problems = [];
+
+        if ($check->status === 'failed') {
+            $problems[] = 'OCR полностью не справился с распознаванием';
+        }
+
+        if (!$check->amount_found || $check->amount === null) {
+            $problems[] = 'Сумма не найдена';
+        }
+
+        if (!$check->date_found || $check->check_date === null) {
+            $problems[] = 'Дата не найдена';
+        }
+
+        if ($check->text_length !== null && $check->text_length < 50) {
+            $problems[] = 'Очень мало распознанного текста (' . $check->text_length . ' символов)';
+        }
+
+        if ($check->readable_ratio !== null && $check->readable_ratio < 0.3) {
+            $problems[] = 'Низкое качество распознавания (' . round($check->readable_ratio * 100) . '% читаемых символов)';
+        }
+
+        if (empty($check->raw_text)) {
+            $problems[] = 'Текст вообще не был распознан';
+        }
+
+        if ($check->ocr_method === null) {
+            $problems[] = 'Ни один OCR метод не сработал';
+        }
+
+        // Анализ raw_text на типичные проблемы
+        if ($check->raw_text) {
+            $text = $check->raw_text;
+            
+            // Проверка на "мусорный" текст
+            if (preg_match('/[^\p{Cyrillic}\p{Latin}\d\s.,;:!?₽\-\/\\\\()%]+/u', $text, $matches)) {
+                $garbageRatio = mb_strlen(implode('', $matches)) / mb_strlen($text);
+                if ($garbageRatio > 0.3) {
+                    $problems[] = 'Много нераспознаваемых символов (возможно плохое качество изображения)';
+                }
+            }
+            
+            // Проверка на наличие ключевых слов чека
+            $hasKeywords = preg_match('/итого|сумма|всего|total|amount|чек|receipt/ui', $text);
+            if (!$hasKeywords && $check->text_length > 100) {
+                $problems[] = 'Текст распознан, но не содержит ключевых слов чека (возможно не чек)';
+            }
+        }
+
+        return $problems;
+    }
+
+    /**
+     * Получить рекомендации по исправлению
+     */
+    private function getRecommendations(Check $check): array
+    {
+        $recommendations = [];
+
+        if ($check->text_length !== null && $check->text_length < 50) {
+            $recommendations[] = 'Попросить пользователя отправить фото лучшего качества';
+            $recommendations[] = 'Проверить настройки DPI при конвертации PDF';
+        }
+
+        if ($check->readable_ratio !== null && $check->readable_ratio < 0.4) {
+            $recommendations[] = 'Улучшить предобработку изображения (контраст, резкость)';
+            $recommendations[] = 'Попробовать другой OCR метод';
+        }
+
+        if (!$check->amount_found && $check->raw_text) {
+            $recommendations[] = 'Проверить паттерны поиска суммы в parsePaymentAmount()';
+            $recommendations[] = 'Возможно формат суммы нестандартный - добавить новый паттерн';
+        }
+
+        if (!$check->date_found && $check->raw_text) {
+            $recommendations[] = 'Проверить паттерны поиска даты';
+            $recommendations[] = 'Дата может быть в нестандартном формате или плохо видна';
+        }
+
+        if ($check->file_type === 'pdf') {
+            $recommendations[] = 'PDF: проверить разрешение конвертации (сейчас 450 DPI)';
+            $recommendations[] = 'PDF: возможно нужна другая предобработка';
+        }
+
+        return $recommendations;
+    }
 }
