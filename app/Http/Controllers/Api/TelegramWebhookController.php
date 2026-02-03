@@ -1207,14 +1207,16 @@ PYTHON;
             // For Yandex Vision API, API keys should use "Api-Key" header, IAM tokens use "Bearer" header
             $isApiKey = str_starts_with($apiKey, 'AQVN') || str_starts_with($apiKey, 'AQAA');
             
-            // Build headers - try both formats for API key if needed
+            // Build headers - according to Yandex Vision API docs:
+            // For API keys: use x-api-key header
+            // For IAM tokens: use Authorization: Bearer header
             $headers = [
                 'Content-Type' => 'application/json'
             ];
             
             if ($isApiKey) {
-                // API key format - try Api-Key header first
-                $headers['Authorization'] = 'Api-Key ' . $apiKey;
+                // API key format - use x-api-key header (not Authorization: Api-Key)
+                $headers['x-api-key'] = $apiKey;
             } else {
                 // IAM token format
                 $headers['Authorization'] = 'Bearer ' . $apiKey;
@@ -1289,15 +1291,15 @@ PYTHON;
                 $errorCode = $errorBody['code'] ?? $response->status();
                 
                 if ($response->status() === 401 && $isApiKey) {
-                    // Try with Bearer format for API key (some APIs accept both)
-                    Log::warning('Yandex Vision API: Invalid token (401) with Api-Key format, trying Bearer format', [
+                    // Try with Authorization: Api-Key format as fallback (some APIs accept both)
+                    Log::warning('Yandex Vision API: Invalid token (401) with x-api-key format, trying Authorization: Api-Key format', [
                         'error_code' => $errorCode,
                         'error_message' => $errorMessage
                     ]);
                     
                     $response = Http::timeout(30)
                         ->withHeaders([
-                            'Authorization' => 'Bearer ' . $apiKey,
+                            'Authorization' => 'Api-Key ' . $apiKey,
                             'Content-Type' => 'application/json'
                         ])
                         ->post('https://vision.api.cloud.yandex.net/vision/v1/batchAnalyze', [
