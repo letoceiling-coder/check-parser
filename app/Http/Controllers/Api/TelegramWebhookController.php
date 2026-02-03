@@ -1144,22 +1144,22 @@ PYTHON;
             }
 
             $image = new \Imagick();
-            // Higher resolution for better OCR quality (especially for Sberbank documents)
-            $image->setResolution(600, 600);
+            // 300 DPI is good balance between quality and file size
+            $image->setResolution(300, 300);
             $image->readImage($pdfPath . '[0]'); // Read first page only
             
             // Enhance image quality for OCR
             $image->setImageFormat('jpg');
-            $image->setImageCompressionQuality(100); // Maximum quality
+            $image->setImageCompressionQuality(85); // Good quality, smaller file
             $image->normalizeImage(); // Improve contrast
             $image->sharpenImage(0, 1); // Slight sharpening
             
             // Resize if too large (OCR works better with reasonable sizes)
             $width = $image->getImageWidth();
             $height = $image->getImageHeight();
-            if ($width > 4000 || $height > 4000) {
+            if ($width > 2500 || $height > 2500) {
                 // Scale down while maintaining aspect ratio
-                $image->scaleImage(4000, 4000, true);
+                $image->scaleImage(2500, 2500, true);
             }
             
             $imagePath = 'telegram/pdf_' . uniqid() . '.jpg';
@@ -1169,7 +1169,7 @@ PYTHON;
             Log::info('PDF converted to image', [
                 'pdf_path' => $pdfPath,
                 'image_path' => $imagePath,
-                'resolution' => '600 DPI'
+                'resolution' => '300 DPI'
             ]);
 
             return Storage::disk('local')->path($imagePath);
