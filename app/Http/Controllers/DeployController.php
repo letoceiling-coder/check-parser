@@ -318,20 +318,40 @@ EOF;
 
             // Download composer installer
             $installerUrl = 'https://getcomposer.org/installer';
-            $installerPath = sys_get_temp_dir() . '/composer-installer.php';
+            $installerPath = sys_get_temp_dir() . '/composer-installer-' . uniqid() . '.php';
             
-            $installerContent = file_get_contents($installerUrl);
+            $context = stream_context_create([
+                'http' => [
+                    'timeout' => 30,
+                    'user_agent' => 'Laravel Deploy Script'
+                ]
+            ]);
+            
+            $installerContent = @file_get_contents($installerUrl, false, $context);
             if ($installerContent === false) {
                 return [
                     'success' => false,
-                    'error' => 'Failed to download composer installer'
+                    'error' => 'Failed to download composer installer from ' . $installerUrl
                 ];
             }
             
-            file_put_contents($installerPath, $installerContent);
+            if (file_put_contents($installerPath, $installerContent) === false) {
+                return [
+                    'success' => false,
+                    'error' => 'Failed to save composer installer to ' . $installerPath
+                ];
+            }
 
-            // Run installer
-            $installResult = Process::path(base_path())->run("php {$installerPath} --install-dir={$binDir} --filename=composer");
+            // Set HOME to a writable directory to avoid permission issues
+            $homeDir = getenv('HOME');
+            if (empty($homeDir) || !is_writable($homeDir)) {
+                $homeDir = sys_get_temp_dir();
+            }
+            
+            // Run installer with explicit HOME directory
+            $installResult = Process::path(base_path())
+                ->env(['HOME' => $homeDir, 'COMPOSER_HOME' => $homeDir . '/.composer'])
+                ->run("php {$installerPath} --install-dir={$binDir} --filename=composer 2>&1");
             
             if (!$installResult->successful()) {
                 $errorOutput = trim($installResult->errorOutput());
