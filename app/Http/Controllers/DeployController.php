@@ -176,31 +176,55 @@ EOF;
                        $log[] = 'public/index.php created';
                    }
 
-                   // Step 3: Ensure composer is installed in bin/composer
-                   $composerPath = base_path('bin/composer');
-                   if (!file_exists($composerPath)) {
-                $log[] = 'Installing composer to bin/composer...';
-                $installComposer = $this->installComposer($composerPath);
-                
-                if (!$installComposer['success']) {
-                    $errors[] = $installComposer['error'];
-                } else {
-                    $log[] = 'Composer installed successfully';
-                }
-            }
+                   // Step 3: Check if composer is available (global or bin/composer)
+                   $composerPath = null;
+                   $composerCmd = null;
+                   
+                   // Check if bin/composer exists
+                   if (file_exists(base_path('bin/composer'))) {
+                       $composerPath = base_path('bin/composer');
+                       $composerCmd = 'php ' . $composerPath;
+                       $log[] = 'Using bin/composer';
+                   } else {
+                       // Check if global composer is available
+                       $checkComposer = Process::path(base_path())->run('composer --version');
+                       if ($checkComposer->successful()) {
+                           $composerCmd = 'composer';
+                           $log[] = 'Using global composer';
+                       } else {
+                           // Try to install composer to bin/composer
+                           $log[] = 'Installing composer to bin/composer...';
+                           $composerPath = base_path('bin/composer');
+                           $installComposer = $this->installComposer($composerPath);
+                           
+                           if (!$installComposer['success']) {
+                               $errorMsg = $installComposer['error'] ?: 'Unknown error during composer installation';
+                               $errors[] = 'Failed to install composer: ' . $errorMsg;
+                               $log[] = 'Composer installation failed: ' . $errorMsg;
+                           } else {
+                               $composerCmd = 'php ' . $composerPath;
+                               $log[] = 'Composer installed successfully to bin/composer';
+                           }
+                       }
+                   }
 
                    // Step 4: Install dependencies
-            $log[] = 'Installing composer dependencies...';
-            $composerPath = file_exists(base_path('bin/composer')) 
-                ? 'bin/composer' 
-                : 'composer';
-            $composerInstall = Process::path(base_path())->run("php {$composerPath} install --no-interaction --no-dev --optimize-autoloader");
-            
-            if (!$composerInstall->successful()) {
-                $errors[] = 'Composer install failed: ' . $composerInstall->errorOutput();
-            } else {
-                $log[] = 'Dependencies installed successfully';
-            }
+                   if ($composerCmd) {
+                       $log[] = 'Installing composer dependencies...';
+                       $composerInstall = Process::path(base_path())->run("{$composerCmd} install --no-interaction --no-dev --optimize-autoloader");
+                       
+                       if (!$composerInstall->successful()) {
+                           $errorOutput = trim($composerInstall->errorOutput());
+                           $stdOutput = trim($composerInstall->output());
+                           $errorMsg = $errorOutput ?: ($stdOutput ?: 'Unknown error');
+                           $errors[] = 'Composer install failed: ' . $errorMsg;
+                           $log[] = 'Composer install error: ' . $errorMsg;
+                       } else {
+                           $log[] = 'Dependencies installed successfully';
+                       }
+                   } else {
+                       $errors[] = 'Composer is not available and installation failed';
+                   }
 
                    // Step 5: Run migrations
             $log[] = 'Running migrations...';
