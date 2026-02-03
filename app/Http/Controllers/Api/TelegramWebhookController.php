@@ -1144,18 +1144,39 @@ PYTHON;
             }
 
             $image = new \Imagick();
-            $image->setResolution(300, 300); // High resolution for better OCR
+            // Higher resolution for better OCR quality (especially for Sberbank documents)
+            $image->setResolution(600, 600);
             $image->readImage($pdfPath . '[0]'); // Read first page only
             
-            $imagePath = 'telegram/pdf_' . uniqid() . '.jpg';
+            // Enhance image quality for OCR
             $image->setImageFormat('jpg');
-            $image->setImageCompressionQuality(95);
+            $image->setImageCompressionQuality(100); // Maximum quality
+            $image->normalizeImage(); // Improve contrast
+            $image->sharpenImage(0, 1); // Slight sharpening
+            
+            // Resize if too large (OCR works better with reasonable sizes)
+            $width = $image->getImageWidth();
+            $height = $image->getImageHeight();
+            if ($width > 4000 || $height > 4000) {
+                // Scale down while maintaining aspect ratio
+                $image->scaleImage(4000, 4000, true);
+            }
+            
+            $imagePath = 'telegram/pdf_' . uniqid() . '.jpg';
             $image->writeImage(Storage::disk('local')->path($imagePath));
             $image->destroy();
 
+            Log::info('PDF converted to image', [
+                'pdf_path' => $pdfPath,
+                'image_path' => $imagePath,
+                'resolution' => '600 DPI'
+            ]);
+
             return Storage::disk('local')->path($imagePath);
         } catch (\Exception $e) {
-            Log::error('PDF conversion failed: ' . $e->getMessage());
+            Log::error('PDF conversion failed: ' . $e->getMessage(), [
+                'trace' => substr($e->getTraceAsString(), 0, 500)
+            ]);
             return null;
         }
     }
@@ -1644,10 +1665,17 @@ PYTHON;
             // ---- Amount extraction with scoring (prevents picking INN/account numbers) ----
             $amount = null;
 
-            $keywords = ['итого', 'сумма', 'к оплате', 'всего'];
+            // Keywords that indicate payment amounts (including Sberbank-specific)
+            $keywords = [
+                'итого', 'сумма', 'к оплате', 'всего',
+                'сумма в валюте карты', 'сумма в валюте операции',
+                'сумма в валюте', 'в валюте карты', 'в валюте операции',
+                'оплата', 'платёж', 'платеж'
+            ];
             $badContextWords = [
                 'инн', 'бик', 'кпп', 'огрн', 'р/с', 'счет', 'счёт', 'карта',
                 'идентификатор', 'операц', 'сбп', 'телефон', 'получател', 'отправител',
+                'номер', 'код авторизации', 'авторизации', 'номер карты',
             ];
 
             // Find all numeric candidates (with optional thousands separators and decimals)
@@ -1695,10 +1723,10 @@ PYTHON;
                         continue;
                     }
 
-                    // Currency proximity (₽/руб/р/p/е). OCR often returns "е" for ₽.
-                    $after = mb_strtolower(substr($text, $pos, 25), 'UTF-8');
-                    $before = mb_strtolower(substr($text, max(0, $pos - 25), 25), 'UTF-8');
-                    $hasCurrency = (bool) preg_match('/(₽|руб|р\b|p\b|е\b)/u', $after) || (bool) preg_match('/(₽|руб|р\b|p\b|е\b)/u', $before);
+                    // Currency proximity (₽/руб/р/p/P/е). OCR often returns "е" for ₽, "P" for ₽ in Sberbank docs.
+                    $after = substr($text, $pos, 30);
+                    $before = substr($text, max(0, $pos - 30), 30);
+                    $hasCurrency = (bool) preg_match('/(₽|руб|р\b|p\b|P\b|е\b)/ui', $after) || (bool) preg_match('/(₽|руб|р\b|p\b|P\b|е\b)/ui', $before);
 
                     // Keyword proximity scoring
                     $score = 0;
