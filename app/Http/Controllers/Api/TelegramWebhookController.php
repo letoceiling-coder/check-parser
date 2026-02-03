@@ -1166,36 +1166,67 @@ PYTHON;
     private function extractTextWithYandexVision(string $filePath): ?string
     {
         try {
-            $apiKey = env('YANDEX_VISION_API_KEY');
-            if (!$apiKey) {
-                Log::debug('Yandex Vision API key not configured');
+            $iamToken = env('YANDEX_VISION_API_KEY'); // IAM token
+            $folderId = env('YANDEX_FOLDER_ID');
+            
+            if (!$iamToken) {
+                Log::debug('Yandex Vision IAM token not configured');
+                return null;
+            }
+            
+            if (!$folderId) {
+                Log::debug('Yandex Folder ID not configured');
                 return null;
             }
 
-            $base64Image = base64_encode(file_get_contents($filePath));
+            $fileContents = file_get_contents($filePath);
+            $base64Image = base64_encode($fileContents);
+            
+            Log::info('Calling Yandex Vision API', [
+                'file' => $filePath,
+                'file_size' => strlen($fileContents),
+                'folder_id' => $folderId
+            ]);
             
             $response = Http::timeout(30)
                 ->withHeaders([
-                    'Authorization' => 'Api-Key ' . $apiKey,
+                    'Authorization' => 'Bearer ' . $iamToken, // IAM token uses Bearer
                     'Content-Type' => 'application/json'
                 ])
-                ->post('https://vision.api.cloud.yandex.net/vision/v1/textDetection', [
-                    'folderId' => env('YANDEX_FOLDER_ID', ''),
+                ->post('https://vision.api.cloud.yandex.net/vision/v1/batchAnalyze', [
+                    'folderId' => $folderId,
                     'analyzeSpecs' => [
                         [
                             'content' => $base64Image,
                             'features' => [
-                                ['type' => 'TEXT_DETECTION']
+                                ['type' => 'TEXT_DETECTION', 'textDetectionConfig' => ['languageCodes' => ['ru', 'en']]]
                             ]
                         ]
                     ]
                 ]);
 
+            Log::info('Yandex Vision API response', [
+                'status' => $response->status(),
+                'successful' => $response->successful(),
+                'body_preview' => substr($response->body(), 0, 500)
+            ]);
+
             if ($response->successful()) {
                 $data = $response->json();
                 $text = '';
                 
-                if (isset($data['results'][0]['textDetection']['pages'][0]['blocks'])) {
+                // Parse response structure
+                if (isset($data['results'][0]['results'][0]['textDetection']['pages'][0]['blocks'])) {
+                    foreach ($data['results'][0]['results'][0]['textDetection']['pages'][0]['blocks'] as $block) {
+                        foreach ($block['lines'] ?? [] as $line) {
+                            foreach ($line['words'] ?? [] as $word) {
+                                $text .= ($word['text'] ?? '') . ' ';
+                            }
+                            $text .= "\n";
+                        }
+                    }
+                } elseif (isset($data['results'][0]['textDetection']['pages'][0]['blocks'])) {
+                    // Alternative response structure
                     foreach ($data['results'][0]['textDetection']['pages'][0]['blocks'] as $block) {
                         foreach ($block['lines'] ?? [] as $line) {
                             foreach ($line['words'] ?? [] as $word) {
@@ -1206,12 +1237,27 @@ PYTHON;
                     }
                 }
                 
-                return !empty(trim($text)) ? trim($text) : null;
+                if (!empty(trim($text))) {
+                    Log::info('Yandex Vision extracted text', [
+                        'text_length' => strlen($text),
+                        'text_preview' => substr($text, 0, 200)
+                    ]);
+                    return trim($text);
+                } else {
+                    Log::debug('Yandex Vision returned empty text');
+                }
+            } else {
+                Log::warning('Yandex Vision API request failed', [
+                    'status' => $response->status(),
+                    'body' => substr($response->body(), 0, 500)
+                ]);
             }
 
             return null;
         } catch (\Exception $e) {
-            Log::debug('Yandex Vision OCR failed: ' . $e->getMessage());
+            Log::error('Yandex Vision OCR exception: ' . $e->getMessage(), [
+                'trace' => substr($e->getTraceAsString(), 0, 500)
+            ]);
             return null;
         }
     }
