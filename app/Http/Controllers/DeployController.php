@@ -23,20 +23,32 @@ class DeployController extends Controller
             $token = substr($token, 7);
         }
         
-        // Read token from config (which reads from .env)
-        // Clear config cache first to ensure fresh value
-        Artisan::call('config:clear');
-        $expectedToken = config('app.deploy_token') ?? env('DEPLOY_TOKEN');
+        // Read token directly from .env (bypass config cache)
+        $expectedToken = env('DEPLOY_TOKEN');
+        
+        // Also try reading from request if Authorization header is different format
+        if (!$token && $request->hasHeader('Authorization')) {
+            $authHeader = $request->header('Authorization');
+            if (str_starts_with($authHeader, 'Bearer ')) {
+                $token = substr($authHeader, 7);
+            } else {
+                $token = $authHeader;
+            }
+        }
         
         if (!$expectedToken || $token !== $expectedToken) {
             Log::warning('Deploy token mismatch', [
-                'received' => substr($token ?? '', 0, 10) . '...',
-                'expected' => substr($expectedToken ?? '', 0, 10) . '...',
+                'received' => $token ? substr($token, 0, 10) . '...' : 'empty',
+                'expected' => $expectedToken ? substr($expectedToken, 0, 10) . '...' : 'empty',
             ]);
             
             return response()->json([
                 'success' => false,
-                'error' => 'Unauthorized: Invalid token'
+                'error' => 'Unauthorized: Invalid token',
+                'debug' => [
+                    'token_received' => $token ? 'yes' : 'no',
+                    'token_expected' => $expectedToken ? 'yes' : 'no',
+                ]
             ], 401);
         }
 
