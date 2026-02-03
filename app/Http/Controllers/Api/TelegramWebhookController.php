@@ -1225,12 +1225,13 @@ PYTHON;
             Log::info('Calling OCR.space API', ['file' => $filePath, 'file_size' => filesize($filePath)]);
             
             $response = Http::timeout(60)
+                ->asMultipart()
                 ->attach('file', file_get_contents($filePath), basename($filePath))
                 ->post('https://api.ocr.space/parse/image', [
                     'apikey' => $apiKey,
                     'language' => 'rus', // Russian language
-                    'isOverlayRequired' => false,
-                    'detectOrientation' => true,
+                    'isOverlayRequired' => 'false', // Must be string
+                    'detectOrientation' => 'true', // Must be string
                 ]);
 
             Log::info('OCR.space API response', [
