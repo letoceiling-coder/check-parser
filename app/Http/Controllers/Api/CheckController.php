@@ -148,7 +148,7 @@ class CheckController extends Controller
     /**
      * Получить файл чека
      */
-    public function file(int $id)
+    public function file(Request $request, int $id)
     {
         $check = Check::findOrFail($id);
         
@@ -161,6 +161,7 @@ class CheckController extends Controller
 
         return response()->file($path, [
             'Content-Type' => $mimeType,
+            'Access-Control-Allow-Origin' => '*',
         ]);
     }
 }

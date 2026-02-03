@@ -5,6 +5,7 @@ import Layout from './components/Layout';
 import Dashboard from './pages/Dashboard';
 import Bot from './pages/Bot';
 import Checks from './pages/Checks';
+import CheckDetails from './pages/CheckDetails';
 import './App.css';
 
 const API_URL = process.env.REACT_APP_API_URL || window.location.origin;
@@ -119,6 +120,7 @@ function App() {
                 <Routes>
                   <Route path="/" element={<Dashboard />} />
                   <Route path="/checks" element={<Checks />} />
+                  <Route path="/checks/:id" element={<CheckDetails />} />
                   <Route path="/bot" element={<Bot />} />
                   <Route path="*" element={<Navigate to="/" replace />} />
                 </Routes>

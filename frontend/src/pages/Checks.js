@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { Link } from 'react-router-dom';
 
 const API_URL = process.env.REACT_APP_API_URL || window.location.origin;
 
@@ -14,8 +15,6 @@ function Checks() {
     ocr_method: 'all',
     search: '',
   });
-  const [selectedCheck, setSelectedCheck] = useState(null);
-  const [showModal, setShowModal] = useState(false);
 
   const fetchChecks = useCallback(async (page = 1) => {
     setLoading(true);
@@ -86,16 +85,6 @@ function Checks() {
     fetchChecks(1);
   };
 
-  const openCheckDetails = (check) => {
-    setSelectedCheck(check);
-    setShowModal(true);
-  };
-
-  const closeModal = () => {
-    setShowModal(false);
-    setSelectedCheck(null);
-  };
-
   const formatDate = (dateString) => {
     if (!dateString) return '—';
     const date = new Date(dateString);
@@ -136,10 +125,10 @@ function Checks() {
 
   const getOcrMethodLabel = (method) => {
     const labels = {
-      extractTextWithTesseract: 'Tesseract (local)',
-      extractTextWithRemoteTesseract: 'Tesseract (VPS)',
+      extractTextWithTesseract: 'Tesseract',
+      extractTextWithRemoteTesseract: 'VPS',
       extractTextWithOCRspace: 'OCR.space',
-      extractTextWithGoogleVision: 'Google Vision',
+      extractTextWithGoogleVision: 'Google',
     };
     return labels[method] || method || '—';
   };
@@ -148,41 +137,41 @@ function Checks() {
     <div className="p-6">
       {/* Header */}
       <div className="mb-6">
-        <h1 className="text-2xl font-bold text-gray-800">📝 Чеки</h1>
+        <h1 className="text-2xl font-bold text-gray-800">🧾 Чеки</h1>
         <p className="text-gray-600">История обработанных чеков и статистика</p>
       </div>
 
       {/* Stats Cards */}
       {stats && (
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
-          <div className="bg-white rounded-lg shadow p-4">
+          <div className="bg-white rounded-xl shadow-lg p-5 border-l-4 border-gray-400">
             <div className="text-3xl font-bold text-gray-800">{stats.total}</div>
             <div className="text-gray-600 text-sm">Всего чеков</div>
           </div>
-          <div className="bg-white rounded-lg shadow p-4">
+          <div className="bg-white rounded-xl shadow-lg p-5 border-l-4 border-green-500">
             <div className="text-3xl font-bold text-green-600">{stats.success}</div>
             <div className="text-gray-600 text-sm">Успешно ({stats.success_rate}%)</div>
           </div>
-          <div className="bg-white rounded-lg shadow p-4">
+          <div className="bg-white rounded-xl shadow-lg p-5 border-l-4 border-yellow-500">
             <div className="text-3xl font-bold text-yellow-600">{stats.partial}</div>
-            <div className="text-gray-600 text-sm">Частично распознано</div>
+            <div className="text-gray-600 text-sm">Частично</div>
           </div>
-          <div className="bg-white rounded-lg shadow p-4">
+          <div className="bg-white rounded-xl shadow-lg p-5 border-l-4 border-red-500">
             <div className="text-3xl font-bold text-red-600">{stats.failed}</div>
-            <div className="text-gray-600 text-sm">Ошибки распознавания</div>
+            <div className="text-gray-600 text-sm">Ошибки</div>
           </div>
         </div>
       )}
 
       {/* Filters */}
-      <div className="bg-white rounded-lg shadow p-4 mb-6">
+      <div className="bg-white rounded-xl shadow-lg p-4 mb-6">
         <form onSubmit={handleSearch} className="flex flex-wrap gap-4 items-end">
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Статус</label>
             <select
               value={filters.status}
               onChange={(e) => handleFilterChange('status', e.target.value)}
-              className="border border-gray-300 rounded-lg px-3 py-2"
+              className="border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
             >
               <option value="all">Все</option>
               <option value="success">Успешно</option>
@@ -191,32 +180,32 @@ function Checks() {
             </select>
           </div>
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">OCR метод</label>
+            <label className="block text-sm font-medium text-gray-700 mb-1">OCR</label>
             <select
               value={filters.ocr_method}
               onChange={(e) => handleFilterChange('ocr_method', e.target.value)}
-              className="border border-gray-300 rounded-lg px-3 py-2"
+              className="border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
             >
               <option value="all">Все</option>
-              <option value="extractTextWithTesseract">Tesseract (local)</option>
-              <option value="extractTextWithRemoteTesseract">Tesseract (VPS)</option>
+              <option value="extractTextWithTesseract">Tesseract</option>
+              <option value="extractTextWithRemoteTesseract">VPS Tesseract</option>
               <option value="extractTextWithOCRspace">OCR.space</option>
               <option value="extractTextWithGoogleVision">Google Vision</option>
             </select>
           </div>
-          <div className="flex-1">
+          <div className="flex-1 min-w-[200px]">
             <label className="block text-sm font-medium text-gray-700 mb-1">Поиск</label>
             <input
               type="text"
               value={filters.search}
               onChange={(e) => setFilters(prev => ({ ...prev, search: e.target.value }))}
-              placeholder="Имя пользователя или chat_id..."
-              className="w-full border border-gray-300 rounded-lg px-3 py-2"
+              placeholder="Имя или chat_id..."
+              className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
             />
           </div>
           <button
             type="submit"
-            className="bg-blue-500 text-white px-4 py-2 rounded-lg hover:bg-blue-600 transition"
+            className="bg-blue-500 text-white px-5 py-2 rounded-lg hover:bg-blue-600 transition shadow-md"
           >
             🔍 Поиск
           </button>
@@ -224,20 +213,20 @@ function Checks() {
       </div>
 
       {/* Table */}
-      <div className="bg-white rounded-lg shadow overflow-hidden">
+      <div className="bg-white rounded-xl shadow-lg overflow-hidden">
         <div className="overflow-x-auto">
           <table className="min-w-full divide-y divide-gray-200">
             <thead className="bg-gray-50">
               <tr>
-                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">ID</th>
-                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Дата</th>
-                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Пользователь</th>
-                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Файл</th>
-                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Сумма</th>
-                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Дата чека</th>
-                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">OCR</th>
-                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Статус</th>
-                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Действия</th>
+                <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase">ID</th>
+                <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase">Создан</th>
+                <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase">Пользователь</th>
+                <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase">Тип</th>
+                <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase">Сумма</th>
+                <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase">Дата чека</th>
+                <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase">OCR</th>
+                <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase">Статус</th>
+                <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase"></th>
               </tr>
             </thead>
             <tbody className="bg-white divide-y divide-gray-200">
@@ -251,31 +240,34 @@ function Checks() {
                 </tr>
               ) : checks.length === 0 ? (
                 <tr>
-                  <td colSpan="9" className="px-4 py-8 text-center text-gray-500">
+                  <td colSpan="9" className="px-4 py-12 text-center text-gray-400">
+                    <div className="text-5xl mb-2">📭</div>
                     Нет данных
                   </td>
                 </tr>
               ) : (
                 checks.map((check) => (
-                  <tr key={check.id} className="hover:bg-gray-50">
-                    <td className="px-4 py-3 text-sm text-gray-900">{check.id}</td>
+                  <tr key={check.id} className="hover:bg-blue-50 transition-colors">
+                    <td className="px-4 py-3 text-sm font-medium text-gray-900">#{check.id}</td>
                     <td className="px-4 py-3 text-sm text-gray-600">{formatDate(check.created_at)}</td>
                     <td className="px-4 py-3 text-sm">
                       <div className="font-medium text-gray-900">{check.first_name || '—'}</div>
                       <div className="text-gray-500 text-xs">@{check.username || check.chat_id}</div>
                     </td>
-                    <td className="px-4 py-3 text-sm">
-                      <span className={`px-2 py-1 rounded text-xs ${
-                        check.file_type === 'pdf' ? 'bg-red-100 text-red-700' : 'bg-blue-100 text-blue-700'
+                    <td className="px-4 py-3">
+                      <span className={`px-2 py-1 rounded text-xs font-medium ${
+                        check.file_type === 'pdf' 
+                          ? 'bg-red-100 text-red-700' 
+                          : 'bg-blue-100 text-blue-700'
                       }`}>
-                        {check.file_type?.toUpperCase() || 'IMG'}
+                        {check.file_type === 'pdf' ? '📄 PDF' : '🖼️ IMG'}
                       </span>
                     </td>
-                    <td className="px-4 py-3 text-sm font-medium text-gray-900">
+                    <td className="px-4 py-3 text-sm font-semibold">
                       {check.corrected_amount ? (
                         <span className="text-orange-600">{formatAmount(check.corrected_amount)}</span>
                       ) : (
-                        formatAmount(check.amount)
+                        <span className="text-gray-900">{formatAmount(check.amount)}</span>
                       )}
                     </td>
                     <td className="px-4 py-3 text-sm text-gray-600">
@@ -285,17 +277,17 @@ function Checks() {
                         formatDate(check.check_date)
                       )}
                     </td>
-                    <td className="px-4 py-3 text-sm text-gray-600">
+                    <td className="px-4 py-3 text-xs text-gray-500">
                       {getOcrMethodLabel(check.ocr_method)}
                     </td>
                     <td className="px-4 py-3">{getStatusBadge(check.status)}</td>
                     <td className="px-4 py-3">
-                      <button
-                        onClick={() => openCheckDetails(check)}
-                        className="text-blue-600 hover:text-blue-800 text-sm font-medium"
+                      <Link
+                        to={`/checks/${check.id}`}
+                        className="inline-flex items-center text-blue-600 hover:text-blue-800 text-sm font-medium transition"
                       >
-                        Подробнее
-                      </button>
+                        Открыть →
+                      </Link>
                     </td>
                   </tr>
                 ))
@@ -306,7 +298,7 @@ function Checks() {
 
         {/* Pagination */}
         {lastPage > 1 && (
-          <div className="px-4 py-3 border-t border-gray-200 flex items-center justify-between">
+          <div className="px-4 py-3 border-t border-gray-200 flex items-center justify-between bg-gray-50">
             <div className="text-sm text-gray-600">
               Показано {checks.length} из {total}
             </div>
@@ -314,17 +306,17 @@ function Checks() {
               <button
                 onClick={() => setCurrentPage(prev => Math.max(prev - 1, 1))}
                 disabled={currentPage === 1}
-                className="px-3 py-1 border rounded text-sm disabled:opacity-50 disabled:cursor-not-allowed"
+                className="px-4 py-2 border rounded-lg text-sm hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed transition"
               >
                 ← Назад
               </button>
-              <span className="px-3 py-1 text-sm">
+              <span className="px-4 py-2 text-sm font-medium">
                 {currentPage} / {lastPage}
               </span>
               <button
                 onClick={() => setCurrentPage(prev => Math.min(prev + 1, lastPage))}
                 disabled={currentPage === lastPage}
-                className="px-3 py-1 border rounded text-sm disabled:opacity-50 disabled:cursor-not-allowed"
+                className="px-4 py-2 border rounded-lg text-sm hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed transition"
               >
                 Вперед →
               </button>
@@ -332,102 +324,6 @@ function Checks() {
           </div>
         )}
       </div>
-
-      {/* Modal */}
-      {showModal && selectedCheck && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-lg shadow-xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
-            <div className="p-6">
-              <div className="flex justify-between items-start mb-4">
-                <h2 className="text-xl font-bold">Чек #{selectedCheck.id}</h2>
-                <button
-                  onClick={closeModal}
-                  className="text-gray-500 hover:text-gray-700"
-                >
-                  ✕
-                </button>
-              </div>
-
-              <div className="grid grid-cols-2 gap-4 mb-4">
-                <div>
-                  <label className="text-sm font-medium text-gray-500">Пользователь</label>
-                  <p className="text-gray-900">
-                    {selectedCheck.first_name || '—'} (@{selectedCheck.username || selectedCheck.chat_id})
-                  </p>
-                </div>
-                <div>
-                  <label className="text-sm font-medium text-gray-500">Статус</label>
-                  <p>{getStatusBadge(selectedCheck.status)}</p>
-                </div>
-                <div>
-                  <label className="text-sm font-medium text-gray-500">Сумма</label>
-                  <p className="text-lg font-bold text-gray-900">
-                    {formatAmount(selectedCheck.corrected_amount || selectedCheck.amount)}
-                  </p>
-                </div>
-                <div>
-                  <label className="text-sm font-medium text-gray-500">Дата чека</label>
-                  <p className="text-gray-900">
-                    {formatDate(selectedCheck.corrected_date || selectedCheck.check_date)}
-                  </p>
-                </div>
-                <div>
-                  <label className="text-sm font-medium text-gray-500">OCR метод</label>
-                  <p className="text-gray-900">{getOcrMethodLabel(selectedCheck.ocr_method)}</p>
-                </div>
-                <div>
-                  <label className="text-sm font-medium text-gray-500">Качество распознавания</label>
-                  <p className="text-gray-900">
-                    {selectedCheck.text_length ? `${selectedCheck.text_length} симв.` : '—'}
-                    {selectedCheck.readable_ratio ? ` (${Math.round(selectedCheck.readable_ratio * 100)}% читаемых)` : ''}
-                  </p>
-                </div>
-              </div>
-
-              {selectedCheck.raw_text && (
-                <div className="mb-4">
-                  <label className="text-sm font-medium text-gray-500">Распознанный текст</label>
-                  <pre className="mt-1 p-3 bg-gray-100 rounded text-sm overflow-x-auto whitespace-pre-wrap max-h-40">
-                    {selectedCheck.raw_text}
-                  </pre>
-                </div>
-              )}
-
-              {selectedCheck.file_path && (
-                <div className="mb-4">
-                  <label className="text-sm font-medium text-gray-500">Файл</label>
-                  <div className="mt-1">
-                    <a
-                      href={`${API_URL}/api/checks/${selectedCheck.id}/file`}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="inline-flex items-center text-blue-600 hover:text-blue-800"
-                    >
-                      📎 Открыть файл ({selectedCheck.file_type?.toUpperCase()})
-                    </a>
-                  </div>
-                </div>
-              )}
-
-              {selectedCheck.admin_notes && (
-                <div className="mb-4">
-                  <label className="text-sm font-medium text-gray-500">Заметки</label>
-                  <p className="mt-1 text-gray-700">{selectedCheck.admin_notes}</p>
-                </div>
-              )}
-
-              <div className="border-t pt-4 flex justify-end">
-                <button
-                  onClick={closeModal}
-                  className="px-4 py-2 bg-gray-200 rounded-lg hover:bg-gray-300 transition"
-                >
-                  Закрыть
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }
