@@ -109,9 +109,74 @@ class DeployController extends Controller
             
             $log[] = 'Code updated successfully';
 
-            // Step 2: Ensure composer is installed in bin/composer
-            $composerPath = base_path('bin/composer');
-            if (!file_exists($composerPath)) {
+                   // Step 2: Ensure public/.htaccess and public/index.php exist
+                   $publicHtaccess = public_path('.htaccess');
+                   if (!file_exists($publicHtaccess)) {
+                       $log[] = 'Creating public/.htaccess...';
+                       $htaccessContent = <<<'EOF'
+<IfModule mod_rewrite.c>
+    <IfModule mod_negotiation.c>
+        Options -MultiViews -Indexes
+    </IfModule>
+
+    RewriteEngine On
+
+    # Handle Authorization Header
+    RewriteCond %{HTTP:Authorization} .
+    RewriteRule .* - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]
+
+    # Handle X-XSRF-Token Header
+    RewriteCond %{HTTP:x-xsrf-token} .
+    RewriteRule .* - [E=HTTP_X_XSRF_TOKEN:%{HTTP:X-XSRF-Token}]
+
+    # Serve static files directly (CSS, JS, images, fonts)
+    RewriteCond %{REQUEST_FILENAME} -f
+    RewriteCond %{REQUEST_URI} \.(css|js|png|jpg|jpeg|gif|svg|woff|woff2|ico|json|map)$ [NC]
+    RewriteRule ^ - [L]
+
+    # Redirect Trailing Slashes If Not A Folder...
+    RewriteCond %{REQUEST_FILENAME} !-d
+    RewriteCond %{REQUEST_URI} (.+)/$
+    RewriteRule ^ %1 [L,R=301]
+
+    # Send Requests To Front Controller...
+    RewriteCond %{REQUEST_FILENAME} !-d
+    RewriteCond %{REQUEST_FILENAME} !-f
+    RewriteRule ^ index.php [L]
+</IfModule>
+EOF;
+                       file_put_contents($publicHtaccess, $htaccessContent);
+                       $log[] = 'public/.htaccess created';
+                   }
+                   
+                   $publicIndex = public_path('index.php');
+                   if (!file_exists($publicIndex)) {
+                       $log[] = 'Creating public/index.php...';
+                       $indexContent = <<<'EOF'
+<?php
+
+use Illuminate\Foundation\Application;
+use Illuminate\Http\Request;
+
+define('LARAVEL_START', microtime(true));
+
+if (file_exists($maintenance = __DIR__.'/../storage/framework/maintenance.php')) {
+    require $maintenance;
+}
+
+require __DIR__.'/../vendor/autoload.php';
+
+$app = require_once __DIR__.'/../bootstrap/app.php';
+
+$app->handleRequest(Request::capture());
+EOF;
+                       file_put_contents($publicIndex, $indexContent);
+                       $log[] = 'public/index.php created';
+                   }
+
+                   // Step 3: Ensure composer is installed in bin/composer
+                   $composerPath = base_path('bin/composer');
+                   if (!file_exists($composerPath)) {
                 $log[] = 'Installing composer to bin/composer...';
                 $installComposer = $this->installComposer($composerPath);
                 
@@ -122,7 +187,7 @@ class DeployController extends Controller
                 }
             }
 
-            // Step 3: Install dependencies
+                   // Step 4: Install dependencies
             $log[] = 'Installing composer dependencies...';
             $composerPath = file_exists(base_path('bin/composer')) 
                 ? 'bin/composer' 
@@ -135,7 +200,7 @@ class DeployController extends Controller
                 $log[] = 'Dependencies installed successfully';
             }
 
-            // Step 4: Run migrations
+                   // Step 5: Run migrations
             $log[] = 'Running migrations...';
             $migrate = Process::path(base_path())->run('php artisan migrate --force');
             
@@ -145,7 +210,7 @@ class DeployController extends Controller
                 $log[] = 'Migrations completed successfully';
             }
 
-            // Step 5: Clear all caches
+                   // Step 6: Clear all caches
             $log[] = 'Clearing caches...';
             $cacheCommands = [
                 'config:clear',
