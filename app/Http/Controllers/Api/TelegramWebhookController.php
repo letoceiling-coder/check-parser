@@ -145,9 +145,8 @@ class TelegramWebhookController extends Controller
     {
         Log::info('Handling /start command', ['bot_id' => $bot->id, 'chat_id' => $chatId]);
         
-        $welcomeMessage = "👋 Привет! Я бот для обработки чеков.\n\n";
-        $welcomeMessage .= "📸 Отправьте мне фото чека или PDF документ, и я извлеку сумму платежа.\n\n";
-        $welcomeMessage .= "Просто отправьте фото или PDF чека, и я обработаю его!";
+        // Используем приветственное сообщение из БД или дефолтное
+        $welcomeMessage = $bot->getWelcomeMessageText();
 
         $this->sendMessage($bot, $chatId, $welcomeMessage);
     }

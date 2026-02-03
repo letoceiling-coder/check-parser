@@ -22,7 +22,13 @@ class BotController extends Controller
             return response()->json(['message' => 'Bot not found'], 404);
         }
 
-        return response()->json($bot);
+        // Добавляем дефолтное сообщение если не установлено
+        $botData = $bot->toArray();
+        $botData['welcome_message'] = $bot->welcome_message;
+        $botData['welcome_message_display'] = $bot->getWelcomeMessageText();
+        $botData['default_welcome_message'] = TelegramBot::DEFAULT_WELCOME_MESSAGE;
+
+        return response()->json($botData);
     }
 
     /**
@@ -83,6 +89,30 @@ class BotController extends Controller
         $this->registerWebhook($bot);
 
         return response()->json($bot);
+    }
+
+    /**
+     * Update bot settings (welcome message, etc.)
+     */
+    public function updateSettings(Request $request, int $id): JsonResponse
+    {
+        $bot = TelegramBot::where('user_id', $request->user()->id)
+            ->where('id', $id)
+            ->firstOrFail();
+
+        $request->validate([
+            'welcome_message' => 'nullable|string|max:4000',
+        ]);
+
+        $bot->update([
+            'welcome_message' => $request->welcome_message,
+        ]);
+
+        return response()->json([
+            'message' => 'Настройки сохранены',
+            'welcome_message' => $bot->welcome_message,
+            'welcome_message_display' => $bot->getWelcomeMessageText(),
+        ]);
     }
 
     /**

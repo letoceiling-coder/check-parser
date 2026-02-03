@@ -27,6 +27,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/bot', [\App\Http\Controllers\Api\BotController::class, 'index']);
     Route::post('/bot', [\App\Http\Controllers\Api\BotController::class, 'store']);
     Route::put('/bot/{id}', [\App\Http\Controllers\Api\BotController::class, 'update']);
+    Route::put('/bot/{id}/settings', [\App\Http\Controllers\Api\BotController::class, 'updateSettings']);
     Route::post('/bot/{id}/test-webhook', [\App\Http\Controllers\Api\BotController::class, 'testWebhook']);
     
     // Check routes
