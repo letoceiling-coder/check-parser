@@ -2,10 +2,16 @@ import React, { useState } from 'react';
 
 const API_URL = process.env.REACT_APP_API_URL || window.location.origin;
 
+// Generate default webhook URL based on current domain
+const getDefaultWebhookUrl = () => {
+  const origin = window.location.origin;
+  return `${origin}/api/telegram/webhook`;
+};
+
 function BotSettings({ bot, onBotCreated, onUpdate }) {
   const [formData, setFormData] = useState({
     token: bot?.token || '',
-    webhook_url: bot?.webhook_url || '',
+    webhook_url: bot?.webhook_url || getDefaultWebhookUrl(),
   });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
