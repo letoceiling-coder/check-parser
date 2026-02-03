@@ -176,15 +176,7 @@ class TelegramWebhookController extends Controller
                 Log::info("Downloaded file", ['path' => $filePath, 'size' => $file['file_size'] ?? 0]);
                 $processedFiles[] = $filePath;
 
-                // Preprocess image to improve QR recognition
-                $processedPath = $this->preprocessImage($filePath);
-                if ($processedPath) {
-                    Log::info("Image preprocessed", ['original' => $filePath, 'processed' => $processedPath]);
-                    $processedFiles[] = $processedPath;
-                    $filePath = $processedPath;
-                }
-
-                // Process check (QR code parsing) - try multiple methods
+                // Process check (QR code parsing) - try original first, then preprocessed versions
                 Log::info("Starting QR code extraction", ['file' => $filePath]);
                 $checkData = $this->processCheck($filePath);
                 
@@ -325,9 +317,11 @@ class TelegramWebhookController extends Controller
         try {
             $fullPath = Storage::disk('local')->path($filePath);
 
-            // Try original image first
+            // Try original image first (without preprocessing)
+            Log::info("Attempting QR recognition on original image", ['file' => $filePath]);
             $result = $this->tryExtractQRCode($fullPath);
             if ($result) {
+                Log::info("QR code successfully recognized from original image");
                 return $result;
             }
 
@@ -335,15 +329,22 @@ class TelegramWebhookController extends Controller
             $preprocessVariations = [
                 ['contrast' => 1, 'sharpen' => true, 'grayscale' => true],
                 ['contrast' => 2, 'sharpen' => true, 'grayscale' => true],
+                ['contrast' => 3, 'sharpen' => true, 'grayscale' => true],
                 ['contrast' => 1, 'sharpen' => false, 'grayscale' => true],
                 ['contrast' => 1, 'sharpen' => true, 'grayscale' => false],
+                ['contrast' => 2, 'sharpen' => false, 'grayscale' => true],
+                ['contrast' => 1, 'sharpen' => false, 'grayscale' => false],
+                ['contrast' => 0, 'sharpen' => true, 'grayscale' => true], // Only sharpen and grayscale
             ];
 
-            foreach ($preprocessVariations as $variation) {
+            foreach ($preprocessVariations as $variationIndex => $variation) {
+                Log::info("Trying preprocessing variation {$variationIndex}", $variation);
                 $processedPath = $this->preprocessImageWithOptions($fullPath, $variation);
                 if ($processedPath) {
+                    Log::info("Processed image saved", ['processed' => $processedPath]);
                     $result = $this->tryExtractQRCode(Storage::disk('local')->path($processedPath));
                     if ($result) {
+                        Log::info("QR code successfully recognized from preprocessed image (variation {$variationIndex})");
                         Storage::disk('local')->delete($processedPath);
                         return $result;
                     }
@@ -353,7 +354,9 @@ class TelegramWebhookController extends Controller
 
             return null;
         } catch (\Exception $e) {
-            Log::error('Error processing check: ' . $e->getMessage());
+            Log::error('Error processing check: ' . $e->getMessage(), [
+                'trace' => $e->getTraceAsString()
+            ]);
             return null;
         }
     }
@@ -366,10 +369,13 @@ class TelegramWebhookController extends Controller
         // Try multiple methods in order of reliability
         $methods = [
             'extractQRCodeWithAPI1',      // qrserver.com (most reliable)
-            'extractQRCodeWithAPI2',      // goqr.me
-            'extractQRCodeWithAPI4',      // api4free.com
-            'extractQRCodeWithAPI5',      // qr-code-reader.p.rapidapi.com (if key available)
+            'extractQRCodeWithAPI6',      // qr-server.com (alternative)
+            'extractQRCodeWithAPI7',      // qr-code-reader.com
+            'extractQRCodeWithAPI8',      // qrcode.tec-it.com
             'extractQRCodeWithAPI3',      // api.qrserver alternative method
+            'extractQRCodeWithAPI2',      // goqr.me (may have DNS issues)
+            'extractQRCodeWithAPI4',      // api4free.com (may have DNS issues)
+            'extractQRCodeWithAPI5',      // qr-code-reader.p.rapidapi.com (if key available)
             'extractQRCodeWithZxing',     // zxing (if available)
             'extractQRCodeWithPython',    // Python pyzbar (if available)
         ];
@@ -855,6 +861,115 @@ class TelegramWebhookController extends Controller
     }
 
     /**
+     * Extract QR code using API 6 (qr-server.com - alternative to qrserver.com)
+     */
+    private function extractQRCodeWithAPI6(string $filePath): ?string
+    {
+        try {
+            $url = 'https://qr-server.com/api/read-qr-code/';
+            
+            $response = Http::timeout(30)
+                ->attach('file', file_get_contents($filePath), basename($filePath))
+                ->post($url);
+
+            if ($response->successful()) {
+                $data = $response->json();
+                if (isset($data[0]['symbol'][0]['data']) && !empty(trim($data[0]['symbol'][0]['data']))) {
+                    return $data[0]['symbol'][0]['data'];
+                }
+                if (isset($data['result']) && !empty(trim($data['result']))) {
+                    return $data['result'];
+                }
+            }
+
+            return null;
+        } catch (\Exception $e) {
+            Log::debug('API6 (qr-server) failed: ' . $e->getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * Extract QR code using API 7 (qr-code-reader.com)
+     */
+    private function extractQRCodeWithAPI7(string $filePath): ?string
+    {
+        try {
+            $url = 'https://api.qr-code-reader.com/v1/read-qr-code';
+            
+            $response = Http::timeout(30)
+                ->attach('file', file_get_contents($filePath), basename($filePath))
+                ->post($url);
+
+            if ($response->successful()) {
+                $data = $response->json();
+                if (isset($data['data']) && !empty(trim($data['data']))) {
+                    return $data['data'];
+                }
+                if (isset($data['text']) && !empty(trim($data['text']))) {
+                    return $data['text'];
+                }
+                if (isset($data[0]['data']) && !empty(trim($data[0]['data']))) {
+                    return $data[0]['data'];
+                }
+            }
+
+            return null;
+        } catch (\Exception $e) {
+            Log::debug('API7 (qr-code-reader) failed: ' . $e->getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * Extract QR code using API 8 (qrcode.tec-it.com)
+     */
+    private function extractQRCodeWithAPI8(string $filePath): ?string
+    {
+        try {
+            // Try base64 encoding
+            $base64Image = base64_encode(file_get_contents($filePath));
+            $url = 'https://qrcode.tec-it.com/API/QRCode';
+            
+            $response = Http::timeout(30)
+                ->asForm()
+                ->post($url, [
+                    'data' => 'data:image/jpeg;base64,' . $base64Image
+                ]);
+
+            if ($response->successful()) {
+                $data = $response->json();
+                if (isset($data['value']) && !empty(trim($data['value']))) {
+                    return $data['value'];
+                }
+                if (isset($data['data']) && !empty(trim($data['data']))) {
+                    return $data['data'];
+                }
+            }
+
+            // Try alternative method with file upload
+            $response = Http::timeout(30)
+                ->attach('file', file_get_contents($filePath), basename($filePath))
+                ->post($url);
+
+            if ($response->successful()) {
+                $data = $response->json();
+                if (isset($data['value']) && !empty(trim($data['value']))) {
+                    return $data['value'];
+                }
+                if (isset($data['data']) && !empty(trim($data['data']))) {
+                    return $data['data'];
+                }
+            }
+
+            return null;
+        } catch (\Exception $e) {
+            Log::debug('API8 (qrcode.tec-it) failed: ' . $e->getMessage());
+            return null;
+        }
+    }
+
+    /**
      * Extract QR code using Python with pyzbar (if available)
      */
     private function extractQRCodeWithPython(string $filePath): ?string
@@ -870,18 +985,19 @@ class TelegramWebhookController extends Controller
             $scriptPath = sys_get_temp_dir() . '/qr_decode_' . uniqid() . '.py';
             $script = <<<'PYTHON'
 import sys
-from pyzbar import pyzbar
+from pyzbar.pyzbar import decode
 from PIL import Image
 
 try:
     img = Image.open(sys.argv[1])
-    decoded = pyzbar.decode(img)
-    if decoded:
-        print(decoded[0].data.decode('utf-8'))
+    decoded_objects = decode(img)
+    if decoded_objects:
+        print(decoded_objects[0].data.decode('utf-8'))
         sys.exit(0)
     else:
         sys.exit(1)
 except Exception as e:
+    print(f"Error: {e}", file=sys.stderr)
     sys.exit(1)
 PYTHON;
 
@@ -966,9 +1082,21 @@ PYTHON;
      */
     private function sendCheckResult(TelegramBot $bot, int $chatId, array $checkData): void
     {
+        // Format sum - it may be in kopecks (integer) or rubles (float)
+        $sum = $checkData['sum'] ?? null;
+        $sumFormatted = 'Не указана';
+        if ($sum !== null) {
+            // If sum is greater than 10000, it's likely in kopecks, otherwise in rubles
+            if (is_numeric($sum) && $sum > 10000) {
+                $sumFormatted = number_format($sum / 100, 2, '.', ' ') . ' ₽';
+            } else {
+                $sumFormatted = number_format((float)$sum, 2, '.', ' ') . ' ₽';
+            }
+        }
+
         $message = "✅ Чек успешно обработан!\n\n";
         $message .= "📅 Дата: " . ($checkData['date'] ?? 'Не указана') . "\n";
-        $message .= "💰 Сумма: " . ($checkData['sum'] ? number_format($checkData['sum'] / 100, 2, '.', ' ') . ' ₽' : 'Не указана') . "\n";
+        $message .= "💰 Сумма: {$sumFormatted}\n";
         $message .= "🏪 ФН: " . ($checkData['fn'] ?? 'Не указан') . "\n";
         $message .= "📄 ФД: " . ($checkData['fpd'] ?? 'Не указан') . "\n";
         $message .= "🔐 ФП: " . ($checkData['fp'] ?? 'Не указан') . "\n";
