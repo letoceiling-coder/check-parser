@@ -1674,6 +1674,23 @@ PYTHON;
                 Log::debug('Parsed Russian month date', ['date' => $date, 'match' => $matches[0]]);
             }
             
+            // Try "сегодня в HH:MM" or "вчера в HH:MM" format
+            if (!$date) {
+                if (preg_match('/сегодня\s+(?:в\s+)?(\d{1,2}):(\d{2})/ui', $text, $matches)) {
+                    $today = date('Y-m-d');
+                    $hour = str_pad($matches[1], 2, '0', STR_PAD_LEFT);
+                    $minute = $matches[2];
+                    $date = "{$today} {$hour}:{$minute}";
+                    Log::debug('Parsed "today" date', ['date' => $date, 'match' => $matches[0]]);
+                } elseif (preg_match('/вчера\s+(?:в\s+)?(\d{1,2}):(\d{2})/ui', $text, $matches)) {
+                    $yesterday = date('Y-m-d', strtotime('-1 day'));
+                    $hour = str_pad($matches[1], 2, '0', STR_PAD_LEFT);
+                    $minute = $matches[2];
+                    $date = "{$yesterday} {$hour}:{$minute}";
+                    Log::debug('Parsed "yesterday" date', ['date' => $date, 'match' => $matches[0]]);
+                }
+            }
+            
             // If no date found, try numeric patterns
             if (!$date) {
                 $datePatterns = [
