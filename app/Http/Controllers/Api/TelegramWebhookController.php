@@ -358,10 +358,10 @@ class TelegramWebhookController extends Controller
 
             // Try multiple OCR methods
             // Tesseract first (if installed) - local, fast, no API limits
-            // Then external APIs as fallback
+            // Then remote Tesseract API, then external APIs as fallback
             $ocrMethods = [
-                'extractTextWithTesseract',      // Local - fastest, no limits
-                'extractTextWithYandexVision',   // Good for Russian text
+                'extractTextWithTesseract',      // Local - fastest, no limits, best for documents
+                'extractTextWithRemoteTesseract', // Remote VPS Tesseract API
                 'extractTextWithOCRspace',       // Free but may timeout
                 'extractTextWithGoogleVision',  // Paid but reliable
             ];
@@ -1181,148 +1181,6 @@ PYTHON;
         }
     }
 
-    /**
-     * Extract text using Yandex Vision API
-     */
-    private function extractTextWithYandexVision(string $filePath): ?string
-    {
-        try {
-            $apiKey = env('YANDEX_VISION_API_KEY'); // Can be IAM token or API key
-            $folderId = env('YANDEX_FOLDER_ID');
-            
-            if (!$apiKey) {
-                Log::debug('Yandex Vision API key not configured');
-                return null;
-            }
-            
-            if (!$folderId) {
-                Log::debug('Yandex Folder ID not configured');
-                return null;
-            }
-
-            $fileContents = file_get_contents($filePath);
-            $base64Image = base64_encode($fileContents);
-            
-            // Determine if it's an API key (starts with AQVN or AQAA) or IAM token (starts with t1.)
-            // For Yandex Vision API, API keys should use "Api-Key" header, IAM tokens use "Bearer" header
-            $isApiKey = str_starts_with($apiKey, 'AQVN') || str_starts_with($apiKey, 'AQAA');
-            
-            // Build headers - according to Yandex Vision API docs:
-            // For API keys: use Authorization: Api-Key header
-            // For IAM tokens: use Authorization: Bearer header
-            $headers = [
-                'Content-Type' => 'application/json'
-            ];
-            
-            if ($isApiKey) {
-                // API key format - use Authorization: Api-Key header
-                $headers['Authorization'] = 'Api-Key ' . $apiKey;
-            } else {
-                // IAM token format
-                $headers['Authorization'] = 'Bearer ' . $apiKey;
-            }
-            
-            Log::info('Calling Yandex Vision API', [
-                'file' => $filePath,
-                'file_size' => strlen($fileContents),
-                'folder_id' => $folderId,
-                'auth_type' => $isApiKey ? 'API-Key' : 'IAM-Token',
-                'api_key_preview' => substr($apiKey, 0, 10) . '...'
-            ]);
-            
-            $response = Http::timeout(30)
-                ->withHeaders($headers)
-                ->post('https://vision.api.cloud.yandex.net/vision/v1/batchAnalyze', [
-                    'folderId' => $folderId,
-                    'analyzeSpecs' => [
-                        [
-                            'content' => $base64Image,
-                            'features' => [
-                                ['type' => 'TEXT_DETECTION', 'textDetectionConfig' => ['languageCodes' => ['ru', 'en']]]
-                            ]
-                        ]
-                    ]
-                ]);
-
-            Log::info('Yandex Vision API response', [
-                'status' => $response->status(),
-                'successful' => $response->successful(),
-                'body_preview' => substr($response->body(), 0, 500)
-            ]);
-
-            if ($response->successful()) {
-                $data = $response->json();
-                $text = '';
-                
-                // Parse response structure
-                if (isset($data['results'][0]['results'][0]['textDetection']['pages'][0]['blocks'])) {
-                    foreach ($data['results'][0]['results'][0]['textDetection']['pages'][0]['blocks'] as $block) {
-                        foreach ($block['lines'] ?? [] as $line) {
-                            foreach ($line['words'] ?? [] as $word) {
-                                $text .= ($word['text'] ?? '') . ' ';
-                            }
-                            $text .= "\n";
-                        }
-                    }
-                } elseif (isset($data['results'][0]['textDetection']['pages'][0]['blocks'])) {
-                    // Alternative response structure
-                    foreach ($data['results'][0]['textDetection']['pages'][0]['blocks'] as $block) {
-                        foreach ($block['lines'] ?? [] as $line) {
-                            foreach ($line['words'] ?? [] as $word) {
-                                $text .= ($word['text'] ?? '') . ' ';
-                            }
-                            $text .= "\n";
-                        }
-                    }
-                }
-                
-                if (!empty(trim($text))) {
-                    Log::info('Yandex Vision extracted text', [
-                        'text_length' => strlen($text),
-                        'text_preview' => substr($text, 0, 200)
-                    ]);
-                    return trim($text);
-                } else {
-                    Log::debug('Yandex Vision returned empty text');
-                }
-            } else {
-                $errorBody = $response->json();
-                $errorMessage = $errorBody['message'] ?? 'Unknown error';
-                $errorCode = $errorBody['code'] ?? $response->status();
-                
-                // Log error
-                Log::error('Yandex Vision API: Authentication failed', [
-                    'error_code' => $errorCode,
-                    'error_message' => $errorMessage,
-                    'status' => $response->status(),
-                    'auth_type' => $isApiKey ? 'API-Key' : 'IAM-Token'
-                ]);
-                
-                if ($response->status() === 403) {
-                    Log::error('Yandex Vision API: Permission denied (403)', [
-                        'error_code' => $errorCode,
-                        'error_message' => $errorMessage,
-                        'folder_id' => $folderId,
-                        'hint' => 'IAM token may not have vision.viewer role. Please check Yandex Cloud IAM permissions for the folder.'
-                    ]);
-                } else {
-                    Log::warning('Yandex Vision API request failed', [
-                        'status' => $response->status(),
-                        'error_code' => $errorCode,
-                        'error_message' => $errorMessage,
-                        'body' => substr($response->body(), 0, 500)
-                    ]);
-                }
-            }
-
-            return null;
-        } catch (\Exception $e) {
-            Log::error('Yandex Vision OCR exception: ' . $e->getMessage(), [
-                'trace' => substr($e->getTraceAsString(), 0, 500)
-            ]);
-            return null;
-        }
-    }
 
     /**
      * Extract text using OCR.space API (free tier available)
@@ -1444,9 +1302,30 @@ PYTHON;
     {
         try {
             // Check if tesseract is available
+            // First try system-wide installation
             $tesseractPath = exec('which tesseract 2>/dev/null');
+            
+            // If not found, try local installation in project
             if (!$tesseractPath) {
-                Log::debug('Tesseract not found - install with: sudo apt-get install tesseract-ocr tesseract-ocr-rus');
+                $projectLocalTesseract = base_path('local/tesseract/bin/tesseract');
+                if (file_exists($projectLocalTesseract) && is_executable($projectLocalTesseract)) {
+                    $tesseractPath = $projectLocalTesseract;
+                    Log::info('Using local Tesseract from project directory');
+                }
+            }
+            
+            // If still not found, try home directory
+            if (!$tesseractPath) {
+                $homeTesseract = getenv('HOME') . '/tesseract-local/bin/tesseract';
+                if (file_exists($homeTesseract) && is_executable($homeTesseract)) {
+                    $tesseractPath = $homeTesseract;
+                    Log::info('Using local Tesseract from home directory');
+                }
+            }
+            
+            if (!$tesseractPath) {
+                Log::debug('Tesseract not found - install system-wide with: sudo apt-get install tesseract-ocr tesseract-ocr-rus');
+                Log::debug('Or install locally in project/local/tesseract/ or ~/tesseract-local/');
                 return null;
             }
 
@@ -1456,58 +1335,231 @@ PYTHON;
                 'file_size' => filesize($filePath)
             ]);
 
-            // Check if Russian language is available
-            $langsOutput = exec('tesseract --list-langs 2>&1', $langsArray, $langsReturnCode);
+            // Preprocess image for better OCR results
+            $preprocessedPath = $this->preprocessImageForTesseract($filePath);
+            if ($preprocessedPath) {
+                // Convert relative path to full path
+                $imageToProcess = Storage::disk('local')->path($preprocessedPath);
+            } else {
+                $imageToProcess = $filePath;
+            }
+
+            // Check if Russian and English languages are available
+            $langsOutput = exec(escapeshellarg($tesseractPath) . ' --list-langs 2>&1', $langsArray, $langsReturnCode);
             $hasRussian = false;
+            $hasEnglish = false;
             if ($langsReturnCode === 0) {
                 foreach ($langsArray as $line) {
-                    if (trim($line) === 'rus') {
+                    $line = trim($line);
+                    if ($line === 'rus') {
                         $hasRussian = true;
-                        break;
+                    }
+                    if ($line === 'eng') {
+                        $hasEnglish = true;
                     }
                 }
             }
 
-            if (!$hasRussian) {
-                Log::warning('Russian language not found for Tesseract. Install with: sudo apt-get install tesseract-ocr-rus');
-                // Try without language specification
-                $langParam = '';
-            } else {
+            // Build language parameter - use both Russian and English if available
+            $langParam = '';
+            if ($hasRussian && $hasEnglish) {
+                $langParam = '-l rus+eng';
+            } elseif ($hasRussian) {
                 $langParam = '-l rus';
+            } elseif ($hasEnglish) {
+                $langParam = '-l eng';
+            } else {
+                Log::warning('No language packs found for Tesseract. Install with: sudo apt-get install tesseract-ocr-rus tesseract-ocr-eng');
             }
 
-            // Run tesseract with Russian language
+            // Run tesseract with optimized parameters for document recognition
+            // --psm 6: Assume a single uniform block of text (good for receipts)
+            // --psm 4: Assume a single column of text of variable sizes
+            // --oem 3: Default, based on what is available (LSTM if available)
             $outputPath = sys_get_temp_dir() . '/tesseract_' . uniqid();
-            $command = "tesseract " . escapeshellarg($filePath) . " " . escapeshellarg($outputPath) . " {$langParam} 2>&1";
+            
+            // Try PSM 6 first (single uniform block) - best for receipts
+            $command = escapeshellarg($tesseractPath) . " " . escapeshellarg($imageToProcess) . " " . escapeshellarg($outputPath) . 
+                       " {$langParam} --psm 6 --oem 3 2>&1";
             
             Log::debug('Running Tesseract command', ['command' => $command]);
             
             exec($command, $output, $returnCode);
 
+            $text = '';
             if ($returnCode === 0 && file_exists($outputPath . '.txt')) {
                 $text = file_get_contents($outputPath . '.txt');
                 unlink($outputPath . '.txt');
+            }
+
+            // If first attempt failed or returned little text, try PSM 4 (single column)
+            if (empty(trim($text)) || strlen(trim($text)) < 10) {
+                Log::debug('Tesseract PSM 6 returned little text, trying PSM 4');
+                $command = escapeshellarg($tesseractPath) . " " . escapeshellarg($imageToProcess) . " " . escapeshellarg($outputPath) . 
+                           " {$langParam} --psm 4 --oem 3 2>&1";
+                exec($command, $output, $returnCode);
                 
-                if (!empty(trim($text))) {
-                    Log::info('Tesseract extracted text successfully', [
-                        'text_length' => strlen($text),
-                        'text_preview' => substr($text, 0, 200)
-                    ]);
-                    return trim($text);
-                } else {
-                    Log::debug('Tesseract returned empty text');
+                if ($returnCode === 0 && file_exists($outputPath . '.txt')) {
+                    $text = file_get_contents($outputPath . '.txt');
+                    unlink($outputPath . '.txt');
                 }
+            }
+
+            // Clean up preprocessed image if it was created
+            if ($preprocessedPath && $preprocessedPath !== $filePath) {
+                $fullPreprocessedPath = Storage::disk('local')->path($preprocessedPath);
+                if (file_exists($fullPreprocessedPath)) {
+                    @unlink($fullPreprocessedPath);
+                }
+            }
+
+            if (!empty(trim($text))) {
+                Log::info('Tesseract extracted text successfully', [
+                    'text_length' => strlen($text),
+                    'text_preview' => substr($text, 0, 200)
+                ]);
+                return trim($text);
             } else {
-                Log::warning('Tesseract failed', [
+                Log::debug('Tesseract returned empty text', [
                     'return_code' => $returnCode,
-                    'output' => implode("\n", $output),
-                    'output_file_exists' => file_exists($outputPath . '.txt')
+                    'output' => implode("\n", array_slice($output, 0, 5))
                 ]);
             }
 
             return null;
         } catch (\Exception $e) {
             Log::error('Tesseract OCR exception: ' . $e->getMessage(), [
+                'trace' => substr($e->getTraceAsString(), 0, 500)
+            ]);
+            return null;
+        }
+    }
+
+    /**
+     * Preprocess image specifically for Tesseract OCR
+     * Optimizes image for better text recognition
+     */
+    private function preprocessImageForTesseract(string $filePath): ?string
+    {
+        try {
+            // Check if Imagick is available
+            if (!extension_loaded('imagick')) {
+                Log::debug('Imagick not available for image preprocessing');
+                return null;
+            }
+
+            $image = new \Imagick($filePath);
+            
+            // Get image dimensions
+            $width = $image->getImageWidth();
+            $height = $image->getImageHeight();
+            
+            // Resize if image is too large (Tesseract works better with 300-400 DPI)
+            // If image is smaller than 1000px, scale it up
+            if ($width < 1000 || $height < 1000) {
+                $scale = max(1000 / $width, 1000 / $height);
+                $newWidth = (int)($width * $scale);
+                $newHeight = (int)($height * $scale);
+                $image->resizeImage($newWidth, $newHeight, \Imagick::FILTER_LANCZOS, 1);
+                Log::debug('Image resized for Tesseract', [
+                    'original' => "{$width}x{$height}",
+                    'new' => "{$newWidth}x{$newHeight}"
+                ]);
+            }
+            
+            // Convert to grayscale (better for OCR)
+            $image->transformImageColorspace(\Imagick::COLORSPACE_GRAY);
+            
+            // Enhance contrast using normalize
+            $image->normalizeImage();
+            
+            // Increase contrast further
+            $image->contrastImage(1);
+            
+            // Sharpen image for better text recognition
+            $image->sharpenImage(0, 1.5);
+            
+            // Apply adaptive threshold (binarization) - very important for OCR
+            // This converts image to black and white, removing noise
+            $image->thresholdImage(0.5);
+            
+            // Reduce noise
+            $image->despeckleImage();
+            
+            // Save preprocessed image
+            $processedPath = 'telegram/preprocessed_' . uniqid() . '.jpg';
+            $image->setImageFormat('jpg');
+            $image->setImageCompressionQuality(95);
+            $image->writeImage(Storage::disk('local')->path($processedPath));
+            $image->destroy();
+
+            Log::debug('Image preprocessed for Tesseract', ['processed_path' => $processedPath]);
+            return $processedPath;
+        } catch (\Exception $e) {
+            Log::debug('Image preprocessing for Tesseract failed: ' . $e->getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * Extract text using remote Tesseract API (on VPS)
+     */
+    private function extractTextWithRemoteTesseract(string $filePath): ?string
+    {
+        try {
+            $remoteUrl = env('TESSERACT_REMOTE_URL', 'http://89.169.39.244:8080/');
+            $remoteToken = env('TESSERACT_REMOTE_TOKEN');
+            
+            if (!$remoteUrl || !$remoteToken) {
+                Log::debug('Remote Tesseract API not configured');
+                return null;
+            }
+            
+            $fileContents = file_get_contents($filePath);
+            $base64Image = base64_encode($fileContents);
+            
+            Log::info('Calling remote Tesseract API', [
+                'url' => $remoteUrl,
+                'file' => $filePath,
+                'file_size' => strlen($fileContents)
+            ]);
+            
+            $response = Http::timeout(30)
+                ->withHeaders([
+                    'Authorization' => 'Bearer ' . $remoteToken,
+                    'Content-Type' => 'application/json'
+                ])
+                ->post($remoteUrl, [
+                    'image' => $base64Image,
+                    'langs' => 'rus+eng'
+                ]);
+            
+            Log::info('Remote Tesseract API response', [
+                'status' => $response->status(),
+                'successful' => $response->successful()
+            ]);
+            
+            if ($response->successful()) {
+                $data = $response->json();
+                if (isset($data['success']) && $data['success'] && !empty($data['text'])) {
+                    Log::info('Remote Tesseract extracted text', [
+                        'text_length' => strlen($data['text']),
+                        'text_preview' => substr($data['text'], 0, 200)
+                    ]);
+                    return trim($data['text']);
+                } else {
+                    Log::debug('Remote Tesseract returned empty text');
+                }
+            } else {
+                Log::warning('Remote Tesseract API request failed', [
+                    'status' => $response->status(),
+                    'body' => substr($response->body(), 0, 500)
+                ]);
+            }
+            
+            return null;
+        } catch (\Exception $e) {
+            Log::error('Remote Tesseract OCR exception: ' . $e->getMessage(), [
                 'trace' => substr($e->getTraceAsString(), 0, 500)
             ]);
             return null;
