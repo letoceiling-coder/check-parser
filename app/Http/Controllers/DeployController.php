@@ -15,6 +15,14 @@ class DeployController extends Controller
      */
     public function deploy(Request $request): JsonResponse
     {
+        // Log that we reached the controller
+        Log::info('DeployController::deploy called', [
+            'method' => $request->method(),
+            'path' => $request->path(),
+            'url' => $request->url(),
+            'full_url' => $request->fullUrl(),
+        ]);
+        
         // Verify token - try multiple methods
         $token = null;
         
