@@ -15,18 +15,13 @@ class DeployController extends Controller
      */
     public function deploy(Request $request): JsonResponse
     {
-        // Verify token
-        $token = $request->bearerToken() ?? $request->header('Authorization');
+        // Verify token - try multiple methods
+        $token = null;
         
-        // Remove 'Bearer ' prefix if present
-        if ($token && str_starts_with($token, 'Bearer ')) {
-            $token = substr($token, 7);
-        }
+        // Method 1: Bearer token
+        $token = $request->bearerToken();
         
-        // Read token directly from .env (bypass config cache)
-        $expectedToken = env('DEPLOY_TOKEN');
-        
-        // Also try reading from request if Authorization header is different format
+        // Method 2: Authorization header
         if (!$token && $request->hasHeader('Authorization')) {
             $authHeader = $request->header('Authorization');
             if (str_starts_with($authHeader, 'Bearer ')) {
@@ -36,19 +31,32 @@ class DeployController extends Controller
             }
         }
         
-        if (!$expectedToken || $token !== $expectedToken) {
-            Log::warning('Deploy token mismatch', [
-                'received' => $token ? substr($token, 0, 10) . '...' : 'empty',
-                'expected' => $expectedToken ? substr($expectedToken, 0, 10) . '...' : 'empty',
-            ]);
-            
+        // Method 3: From request body or query
+        if (!$token) {
+            $token = $request->input('token') ?? $request->query('token');
+        }
+        
+        // Read token directly from .env (bypass config cache)
+        $expectedToken = env('DEPLOY_TOKEN');
+        
+        // Debug logging
+        Log::info('Deploy attempt', [
+            'token_received' => $token ? substr($token, 0, 10) . '...' : 'empty',
+            'token_expected' => $expectedToken ? substr($expectedToken, 0, 10) . '...' : 'empty',
+            'headers' => $request->headers->all(),
+        ]);
+        
+        if (!$expectedToken) {
             return response()->json([
                 'success' => false,
-                'error' => 'Unauthorized: Invalid token',
-                'debug' => [
-                    'token_received' => $token ? 'yes' : 'no',
-                    'token_expected' => $expectedToken ? 'yes' : 'no',
-                ]
+                'error' => 'DEPLOY_TOKEN not configured on server'
+            ], 500);
+        }
+        
+        if (!$token || $token !== $expectedToken) {
+            return response()->json([
+                'success' => false,
+                'error' => 'Unauthorized: Invalid token'
             ], 401);
         }
 
