@@ -177,34 +177,31 @@ EOF;
                    }
 
                    // Step 3: Check if composer is available (global or bin/composer)
-                   $composerPath = null;
                    $composerCmd = null;
                    
-                   // Check if bin/composer exists
-                   if (file_exists(base_path('bin/composer'))) {
+                   // First, check if global composer is available
+                   $checkComposer = Process::path(base_path())->run('composer --version');
+                   if ($checkComposer->successful()) {
+                       $composerCmd = 'composer';
+                       $log[] = 'Using global composer: ' . trim($checkComposer->output());
+                   } elseif (file_exists(base_path('bin/composer'))) {
+                       // Check if bin/composer exists
                        $composerPath = base_path('bin/composer');
                        $composerCmd = 'php ' . $composerPath;
                        $log[] = 'Using bin/composer';
                    } else {
-                       // Check if global composer is available
-                       $checkComposer = Process::path(base_path())->run('composer --version');
-                       if ($checkComposer->successful()) {
-                           $composerCmd = 'composer';
-                           $log[] = 'Using global composer';
+                       // Try to install composer to bin/composer only if global is not available
+                       $log[] = 'Global composer not found, installing composer to bin/composer...';
+                       $composerPath = base_path('bin/composer');
+                       $installComposer = $this->installComposer($composerPath);
+                       
+                       if (!$installComposer['success']) {
+                           $errorMsg = $installComposer['error'] ?: 'Unknown error during composer installation';
+                           $errors[] = 'Failed to install composer: ' . $errorMsg;
+                           $log[] = 'Composer installation failed: ' . $errorMsg;
                        } else {
-                           // Try to install composer to bin/composer
-                           $log[] = 'Installing composer to bin/composer...';
-                           $composerPath = base_path('bin/composer');
-                           $installComposer = $this->installComposer($composerPath);
-                           
-                           if (!$installComposer['success']) {
-                               $errorMsg = $installComposer['error'] ?: 'Unknown error during composer installation';
-                               $errors[] = 'Failed to install composer: ' . $errorMsg;
-                               $log[] = 'Composer installation failed: ' . $errorMsg;
-                           } else {
-                               $composerCmd = 'php ' . $composerPath;
-                               $log[] = 'Composer installed successfully to bin/composer';
-                           }
+                           $composerCmd = 'php ' . $composerPath;
+                           $log[] = 'Composer installed successfully to bin/composer';
                        }
                    }
 
