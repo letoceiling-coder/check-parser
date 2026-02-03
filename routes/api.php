@@ -28,6 +28,8 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/bot', [\App\Http\Controllers\Api\BotController::class, 'store']);
     Route::put('/bot/{id}', [\App\Http\Controllers\Api\BotController::class, 'update']);
     Route::put('/bot/{id}/settings', [\App\Http\Controllers\Api\BotController::class, 'updateSettings']);
+    Route::get('/bot/{id}/description', [\App\Http\Controllers\Api\BotController::class, 'getDescription']);
+    Route::put('/bot/{id}/description', [\App\Http\Controllers\Api\BotController::class, 'updateDescription']);
     Route::post('/bot/{id}/test-webhook', [\App\Http\Controllers\Api\BotController::class, 'testWebhook']);
     
     // Check routes

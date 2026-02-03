@@ -116,6 +116,114 @@ class BotController extends Controller
     }
 
     /**
+     * Get bot description from Telegram API
+     */
+    public function getDescription(Request $request, int $id): JsonResponse
+    {
+        $bot = TelegramBot::where('user_id', $request->user()->id)
+            ->where('id', $id)
+            ->firstOrFail();
+
+        try {
+            // Получаем описание бота
+            $descResponse = Http::timeout(10)
+                ->get("https://api.telegram.org/bot{$bot->token}/getMyDescription");
+            
+            $shortDescResponse = Http::timeout(10)
+                ->get("https://api.telegram.org/bot{$bot->token}/getMyShortDescription");
+
+            $description = '';
+            $shortDescription = '';
+
+            if ($descResponse->successful()) {
+                $data = $descResponse->json();
+                $description = $data['result']['description'] ?? '';
+            }
+
+            if ($shortDescResponse->successful()) {
+                $data = $shortDescResponse->json();
+                $shortDescription = $data['result']['short_description'] ?? '';
+            }
+
+            return response()->json([
+                'description' => $description,
+                'short_description' => $shortDescription,
+            ]);
+        } catch (\Exception $e) {
+            Log::error('Error getting bot description: ' . $e->getMessage());
+            return response()->json([
+                'error' => 'Ошибка получения описания: ' . $e->getMessage(),
+            ], 500);
+        }
+    }
+
+    /**
+     * Update bot description via Telegram API
+     */
+    public function updateDescription(Request $request, int $id): JsonResponse
+    {
+        $bot = TelegramBot::where('user_id', $request->user()->id)
+            ->where('id', $id)
+            ->firstOrFail();
+
+        $request->validate([
+            'description' => 'nullable|string|max:512',
+            'short_description' => 'nullable|string|max:120',
+        ]);
+
+        $errors = [];
+        $success = [];
+
+        try {
+            // Устанавливаем описание (показывается в пустом чате)
+            if ($request->has('description')) {
+                $response = Http::timeout(10)
+                    ->post("https://api.telegram.org/bot{$bot->token}/setMyDescription", [
+                        'description' => $request->description ?: '',
+                    ]);
+
+                if ($response->successful() && $response->json()['ok']) {
+                    $success[] = 'Описание бота обновлено';
+                } else {
+                    $errorData = $response->json();
+                    $errors[] = 'Ошибка описания: ' . ($errorData['description'] ?? 'Unknown');
+                }
+            }
+
+            // Устанавливаем краткое описание (в профиле)
+            if ($request->has('short_description')) {
+                $response = Http::timeout(10)
+                    ->post("https://api.telegram.org/bot{$bot->token}/setMyShortDescription", [
+                        'short_description' => $request->short_description ?: '',
+                    ]);
+
+                if ($response->successful() && $response->json()['ok']) {
+                    $success[] = 'Краткое описание обновлено';
+                } else {
+                    $errorData = $response->json();
+                    $errors[] = 'Ошибка краткого описания: ' . ($errorData['description'] ?? 'Unknown');
+                }
+            }
+
+            if (!empty($errors)) {
+                return response()->json([
+                    'message' => implode('. ', $errors),
+                    'success' => $success,
+                ], 400);
+            }
+
+            return response()->json([
+                'message' => implode('. ', $success) ?: 'Описание обновлено',
+            ]);
+        } catch (\Exception $e) {
+            Log::error('Error updating bot description: ' . $e->getMessage());
+            return response()->json([
+                'error' => 'Ошибка: ' . $e->getMessage(),
+            ], 500);
+        }
+    }
+
+    /**
      * Test webhook
      */
     public function testWebhook(Request $request, int $id): JsonResponse

@@ -24,12 +24,47 @@ function BotSettings({ bot, onBotCreated, onUpdate }) {
   const [welcomeSuccess, setWelcomeSuccess] = useState(null);
   const [welcomeError, setWelcomeError] = useState(null);
 
+  // Состояние для описания бота (Bot Description)
+  const [botDescription, setBotDescription] = useState('');
+  const [botShortDescription, setBotShortDescription] = useState('');
+  const [loadingDescription, setLoadingDescription] = useState(false);
+  const [savingDescription, setSavingDescription] = useState(false);
+  const [descriptionSuccess, setDescriptionSuccess] = useState(null);
+  const [descriptionError, setDescriptionError] = useState(null);
+
   useEffect(() => {
     if (bot) {
       setWelcomeMessage(bot.welcome_message || '');
       setDefaultWelcomeMessage(bot.default_welcome_message || '');
+      // Загружаем описание бота из Telegram
+      fetchBotDescription();
     }
   }, [bot]);
+
+  const fetchBotDescription = async () => {
+    if (!bot) return;
+    
+    setLoadingDescription(true);
+    try {
+      const token = localStorage.getItem('token');
+      const response = await fetch(`${API_URL}/api/bot/${bot.id}/description`, {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Accept': 'application/json',
+        },
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        setBotDescription(data.description || '');
+        setBotShortDescription(data.short_description || '');
+      }
+    } catch (err) {
+      console.error('Error fetching bot description:', err);
+    } finally {
+      setLoadingDescription(false);
+    }
+  };
 
   const handleChange = (e) => {
     setFormData({
@@ -158,6 +193,42 @@ function BotSettings({ bot, onBotCreated, onUpdate }) {
     setWelcomeMessage('');
     setWelcomeSuccess(null);
     setWelcomeError(null);
+  };
+
+  const handleSaveDescription = async () => {
+    if (!bot) return;
+
+    setSavingDescription(true);
+    setDescriptionError(null);
+    setDescriptionSuccess(null);
+
+    try {
+      const token = localStorage.getItem('token');
+      const response = await fetch(`${API_URL}/api/bot/${bot.id}/description`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`,
+          'Accept': 'application/json',
+        },
+        body: JSON.stringify({
+          description: botDescription,
+          short_description: botShortDescription,
+        }),
+      });
+
+      const data = await response.json();
+
+      if (response.ok) {
+        setDescriptionSuccess(data.message || 'Описание бота обновлено!');
+      } else {
+        setDescriptionError(data.message || data.error || 'Ошибка при сохранении');
+      }
+    } catch (err) {
+      setDescriptionError('Ошибка подключения к серверу');
+    } finally {
+      setSavingDescription(false);
+    }
   };
 
   if (bot) {
@@ -311,6 +382,110 @@ function BotSettings({ bot, onBotCreated, onUpdate }) {
               )}
             </div>
           </div>
+        </div>
+
+        {/* Блок редактирования описания бота (Bot Description) */}
+        <div className="mt-6 p-6 bg-gradient-to-r from-purple-50 to-pink-50 rounded-lg border border-purple-100">
+          <h3 className="text-xl font-semibold text-gray-800 mb-4 flex items-center">
+            <span className="text-2xl mr-2">📋</span>
+            Описание бота (Bot Description)
+          </h3>
+          <p className="text-sm text-gray-600 mb-4">
+            Это описание отображается в окне чата <strong>до нажатия кнопки "Старт"</strong> (как на скриншоте Abuse® Club)
+          </p>
+
+          {loadingDescription && (
+            <div className="flex items-center justify-center py-4">
+              <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-purple-500"></div>
+              <span className="ml-2 text-gray-600">Загрузка...</span>
+            </div>
+          )}
+
+          {descriptionError && (
+            <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg mb-4 animate-slide-in">
+              {descriptionError}
+            </div>
+          )}
+
+          {descriptionSuccess && (
+            <div className="bg-green-50 border border-green-200 text-green-700 px-4 py-3 rounded-lg mb-4 animate-slide-in">
+              {descriptionSuccess}
+            </div>
+          )}
+
+          {!loadingDescription && (
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Описание бота (до 512 символов)
+                </label>
+                <textarea
+                  value={botDescription}
+                  onChange={(e) => {
+                    setBotDescription(e.target.value);
+                    setDescriptionSuccess(null);
+                    setDescriptionError(null);
+                  }}
+                  rows={6}
+                  maxLength={512}
+                  className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent transition-all duration-200 resize-none"
+                  placeholder="Что может делать этот бот?&#10;&#10;Опишите возможности вашего бота..."
+                />
+                <p className="mt-1 text-sm text-gray-500">
+                  {botDescription.length}/512 символов. Показывается в пустом чате до нажатия "Старт"
+                </p>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Краткое описание (до 120 символов)
+                </label>
+                <input
+                  type="text"
+                  value={botShortDescription}
+                  onChange={(e) => {
+                    setBotShortDescription(e.target.value);
+                    setDescriptionSuccess(null);
+                    setDescriptionError(null);
+                  }}
+                  maxLength={120}
+                  className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent transition-all duration-200"
+                  placeholder="Краткое описание для профиля бота"
+                />
+                <p className="mt-1 text-sm text-gray-500">
+                  {botShortDescription.length}/120 символов. Показывается в профиле бота
+                </p>
+              </div>
+
+              {/* Превью описания */}
+              {botDescription && (
+                <div className="bg-white p-4 rounded-lg border border-purple-200">
+                  <p className="text-xs text-purple-600 mb-2 uppercase tracking-wide flex items-center">
+                    <span className="mr-1">👁️</span> Превью описания:
+                  </p>
+                  <div className="bg-gray-100 p-3 rounded-lg">
+                    <p className="text-sm font-semibold text-gray-800 mb-2">Что может делать этот бот?</p>
+                    <div className="text-gray-700 whitespace-pre-wrap text-sm">
+                      {botDescription}
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              <button
+                type="button"
+                onClick={handleSaveDescription}
+                disabled={savingDescription}
+                className="w-full bg-purple-500 text-white px-6 py-3 rounded-lg font-medium hover:bg-purple-600 transition-colors duration-200 disabled:bg-gray-400 disabled:cursor-not-allowed"
+              >
+                {savingDescription ? 'Сохранение...' : '📋 Сохранить описание в Telegram'}
+              </button>
+
+              <p className="text-xs text-gray-500 text-center">
+                Описание сохраняется напрямую в Telegram через Bot API
+              </p>
+            </div>
+          )}
         </div>
       </div>
     );
