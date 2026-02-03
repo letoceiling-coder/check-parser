@@ -1717,11 +1717,20 @@ PYTHON;
             if ($response->successful()) {
                 $data = $response->json();
                 if (isset($data['success']) && $data['success'] && !empty($data['text'])) {
+                    $text = trim($data['text']);
+                    
+                    // Проверяем и исправляем кодировку если нужно
+                    // Иногда UTF-8 текст приходит как Latin1
+                    if (!mb_check_encoding($text, 'UTF-8')) {
+                        $text = mb_convert_encoding($text, 'UTF-8', 'ISO-8859-1');
+                        Log::debug('Converted text encoding from ISO-8859-1 to UTF-8');
+                    }
+                    
                     Log::info('Remote Tesseract extracted text', [
-                        'text_length' => strlen($data['text']),
-                        'text_preview' => substr($data['text'], 0, 200)
+                        'text_length' => strlen($text),
+                        'text_preview' => substr($text, 0, 200)
                     ]);
-                    return trim($data['text']);
+                    return $text;
                 } else {
                     Log::debug('Remote Tesseract returned empty text');
                 }
@@ -1827,6 +1836,11 @@ PYTHON;
             // Try Russian month format first: "3 февраля 2026 в 14:38" or "3 февраля 2026"
             $monthPattern = implode('|', array_keys($russianMonths));
             
+            Log::debug('Searching for Russian date pattern', [
+                'month_pattern_length' => strlen($monthPattern),
+                'text_sample' => mb_substr($text, 0, 500)
+            ]);
+            
             // Pattern: "3 февраля 2026 в 14:38" or "3 февраля 2026 14:38:00"
             if (preg_match('/(\d{1,2})\s+(' . $monthPattern . ')\s+(\d{4})(?:\s+(?:в\s+)?(\d{1,2}):(\d{2})(?::(\d{2}))?)?/ui', $text, $matches)) {
                 $day = str_pad($matches[1], 2, '0', STR_PAD_LEFT);
@@ -1846,7 +1860,9 @@ PYTHON;
                 }
                 
                 $date = $dateStr;
-                Log::debug('Parsed Russian month date', ['date' => $date, 'match' => $matches[0]]);
+                Log::info('Parsed Russian month date', ['date' => $date, 'match' => $matches[0]]);
+            } else {
+                Log::debug('Russian month date pattern not matched');
             }
             
             // Try "сегодня в HH:MM" or "вчера в HH:MM" format
