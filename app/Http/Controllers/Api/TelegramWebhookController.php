@@ -1166,11 +1166,11 @@ PYTHON;
     private function extractTextWithYandexVision(string $filePath): ?string
     {
         try {
-            $iamToken = env('YANDEX_VISION_API_KEY'); // IAM token
+            $apiKey = env('YANDEX_VISION_API_KEY'); // Can be IAM token or API key
             $folderId = env('YANDEX_FOLDER_ID');
             
-            if (!$iamToken) {
-                Log::debug('Yandex Vision IAM token not configured');
+            if (!$apiKey) {
+                Log::debug('Yandex Vision API key not configured');
                 return null;
             }
             
@@ -1182,15 +1182,21 @@ PYTHON;
             $fileContents = file_get_contents($filePath);
             $base64Image = base64_encode($fileContents);
             
+            // Determine if it's an API key (starts with AQVN) or IAM token (starts with t1.)
+            // API keys use "Api-Key" header, IAM tokens use "Bearer" header
+            $isApiKey = str_starts_with($apiKey, 'AQVN') || str_starts_with($apiKey, 'AQAA');
+            $authHeader = $isApiKey ? 'Api-Key ' . $apiKey : 'Bearer ' . $apiKey;
+            
             Log::info('Calling Yandex Vision API', [
                 'file' => $filePath,
                 'file_size' => strlen($fileContents),
-                'folder_id' => $folderId
+                'folder_id' => $folderId,
+                'auth_type' => $isApiKey ? 'API-Key' : 'IAM-Token'
             ]);
             
             $response = Http::timeout(30)
                 ->withHeaders([
-                    'Authorization' => 'Bearer ' . $iamToken, // IAM token uses Bearer
+                    'Authorization' => $authHeader,
                     'Content-Type' => 'application/json'
                 ])
                 ->post('https://vision.api.cloud.yandex.net/vision/v1/batchAnalyze', [
