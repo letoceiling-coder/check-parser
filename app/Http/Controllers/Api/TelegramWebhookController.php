@@ -28,9 +28,19 @@ class TelegramWebhookController extends Controller
             
             $bot = $this->findBotByUpdate($update);
             if (!$bot) {
-                Log::warning('Bot not found for update', ['update' => $update]);
+                Log::warning('Bot not found for update', [
+                    'update_id' => $update['update_id'] ?? null,
+                    'has_message' => isset($update['message']),
+                    'has_callback_query' => isset($update['callback_query'])
+                ]);
                 return response()->json(['ok' => true]); // Return ok to Telegram
             }
+
+            Log::info('Bot found, processing update', [
+                'bot_id' => $bot->id,
+                'has_message' => isset($update['message']),
+                'has_callback_query' => isset($update['callback_query'])
+            ]);
 
             // Handle message
             if (isset($update['message'])) {
@@ -60,8 +70,20 @@ class TelegramWebhookController extends Controller
         // Get all active bots
         $bots = TelegramBot::where('is_active', true)->get();
         
+        Log::info('Finding bot by update', [
+            'active_bots_count' => $bots->count(),
+            'has_message' => isset($update['message']),
+            'has_callback_query' => isset($update['callback_query'])
+        ]);
+        
+        if ($bots->count() === 0) {
+            Log::warning('No active bots found in database');
+            return null;
+        }
+        
         // If only one bot, return it
         if ($bots->count() === 1) {
+            Log::info('Using single active bot', ['bot_id' => $bots->first()->id]);
             return $bots->first();
         }
         
@@ -69,14 +91,8 @@ class TelegramWebhookController extends Controller
         // For now, try to get bot info from message and match
         // In production, you might want to use bot_id in webhook URL path
         
-        // Try to get bot info from callback_query or message
-        $botId = null;
-        if (isset($update['callback_query']['from']['id'])) {
-            // This is not reliable, but we'll use first active bot
-        }
-        
         // For now, return first active bot
-        // TODO: Implement proper bot identification (e.g., via webhook URL path)
+        Log::info('Multiple bots found, using first active bot', ['bot_id' => $bots->first()->id]);
         return $bots->first();
     }
 
@@ -119,6 +135,8 @@ class TelegramWebhookController extends Controller
      */
     private function handleStartCommand(TelegramBot $bot, int $chatId): void
     {
+        Log::info('Handling /start command', ['bot_id' => $bot->id, 'chat_id' => $chatId]);
+        
         $welcomeMessage = "👋 Привет! Я бот для обработки чеков.\n\n";
         $welcomeMessage .= "📸 Отправьте мне фото чека или PDF документ, и я извлеку сумму платежа.\n\n";
         $welcomeMessage .= "Просто отправьте фото или PDF чека, и я обработаю его!";
@@ -1558,13 +1576,31 @@ PYTHON;
     private function sendMessage(TelegramBot $bot, int $chatId, string $text): void
     {
         try {
-            Http::post("https://api.telegram.org/bot{$bot->token}/sendMessage", [
+            Log::info('Sending message to Telegram', [
+                'bot_id' => $bot->id,
                 'chat_id' => $chatId,
-                'text' => $text,
-                'parse_mode' => 'HTML',
+                'text_length' => strlen($text)
             ]);
+            
+            $response = Http::timeout(10)
+                ->post("https://api.telegram.org/bot{$bot->token}/sendMessage", [
+                    'chat_id' => $chatId,
+                    'text' => $text,
+                    'parse_mode' => 'HTML',
+                ]);
+
+            if ($response->successful()) {
+                Log::info('Message sent successfully');
+            } else {
+                Log::error('Failed to send message', [
+                    'status' => $response->status(),
+                    'body' => $response->body()
+                ]);
+            }
         } catch (\Exception $e) {
-            Log::error('Error sending message: ' . $e->getMessage());
+            Log::error('Error sending message: ' . $e->getMessage(), [
+                'trace' => $e->getTraceAsString()
+            ]);
         }
     }
 }
