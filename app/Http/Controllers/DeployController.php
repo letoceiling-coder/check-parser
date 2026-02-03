@@ -176,55 +176,43 @@ EOF;
                        $log[] = 'public/index.php created';
                    }
 
-                   // Step 3: Check if composer is available (global or bin/composer)
+                   // Step 3: Ensure composer is installed in bin/composer and use it
                    $composerCmd = null;
                    
-                   // Try multiple methods to find composer
-                   // Method 1: Try 'composer' command directly (might work if in PATH)
-                   $checkComposer = Process::path(base_path())->run('composer --version 2>&1');
-                   if ($checkComposer->successful() && !empty(trim($checkComposer->output()))) {
-                       $composerCmd = 'composer';
-                       $log[] = 'Using global composer: ' . trim($checkComposer->output());
-                   } else {
-                       // Method 2: Try to find composer using 'which' or 'command -v'
-                       $whichComposer = Process::path(base_path())->run('command -v composer 2>&1 || which composer 2>&1');
-                       if ($whichComposer->successful() && !empty(trim($whichComposer->output()))) {
-                           $composerPath = trim($whichComposer->output());
-                           // Test the found composer
-                           $testComposer = Process::path(base_path())->run("{$composerPath} --version 2>&1");
-                           if ($testComposer->successful()) {
-                               $composerCmd = $composerPath;
-                               $log[] = 'Using global composer from: ' . $composerPath . ' - ' . trim($testComposer->output());
-                           }
+                   // First, check if bin/composer exists
+                   $composerPath = base_path('bin/composer');
+                   if (file_exists($composerPath)) {
+                       // Test if it works
+                       $testComposer = Process::path(base_path())->run("php {$composerPath} --version 2>&1");
+                       if ($testComposer->successful()) {
+                           $composerCmd = "php {$composerPath}";
+                           $log[] = 'Using bin/composer: ' . trim($testComposer->output());
+                       } else {
+                           $log[] = 'bin/composer exists but failed to run, will reinstall';
+                           // Remove broken composer
+                           @unlink($composerPath);
                        }
                    }
                    
-                   // If global composer not found, check bin/composer
-                   if (!$composerCmd && file_exists(base_path('bin/composer'))) {
-                       $composerPath = base_path('bin/composer');
-                       $composerCmd = 'php ' . $composerPath;
-                       $log[] = 'Using bin/composer';
-                   }
-                   
-                   // If still no composer, try to install (but this should rarely happen)
+                   // If bin/composer doesn't exist or is broken, install it
                    if (!$composerCmd) {
-                       $log[] = 'Global composer not found, attempting to install composer to bin/composer...';
-                       $composerPath = base_path('bin/composer');
+                       $log[] = 'Installing composer to bin/composer...';
                        $installComposer = $this->installComposer($composerPath);
                        
                        if (!$installComposer['success']) {
                            $errorMsg = $installComposer['error'] ?: 'Unknown error during composer installation';
-                           // Don't fail deployment if composer installation fails - just log it
-                           $log[] = 'Composer installation failed (non-critical): ' . $errorMsg;
-                           // Try one more time with direct composer command
-                           $checkComposerFinal = Process::path(base_path())->run('composer --version 2>&1');
-                           if ($checkComposerFinal->successful() && !empty(trim($checkComposerFinal->output()))) {
-                               $composerCmd = 'composer';
-                               $log[] = 'Using global composer as final fallback: ' . trim($checkComposerFinal->output());
-                           }
+                           $errors[] = 'Failed to install composer: ' . $errorMsg;
+                           $log[] = 'Composer installation failed: ' . $errorMsg;
                        } else {
-                           $composerCmd = 'php ' . $composerPath;
-                           $log[] = 'Composer installed successfully to bin/composer';
+                           // Verify installation
+                           $testComposer = Process::path(base_path())->run("php {$composerPath} --version 2>&1");
+                           if ($testComposer->successful()) {
+                               $composerCmd = "php {$composerPath}";
+                               $log[] = 'Composer installed successfully to bin/composer: ' . trim($testComposer->output());
+                           } else {
+                               $errors[] = 'Composer installed but failed to run: ' . trim($testComposer->output());
+                               $log[] = 'Composer installation verification failed';
+                           }
                        }
                    }
 
