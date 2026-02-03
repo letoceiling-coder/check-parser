@@ -1208,15 +1208,15 @@ PYTHON;
             $isApiKey = str_starts_with($apiKey, 'AQVN') || str_starts_with($apiKey, 'AQAA');
             
             // Build headers - according to Yandex Vision API docs:
-            // For API keys: use x-api-key header
+            // For API keys: use Authorization: Api-Key header
             // For IAM tokens: use Authorization: Bearer header
             $headers = [
                 'Content-Type' => 'application/json'
             ];
             
             if ($isApiKey) {
-                // API key format - use x-api-key header (not Authorization: Api-Key)
-                $headers['x-api-key'] = $apiKey;
+                // API key format - use Authorization: Api-Key header
+                $headers['Authorization'] = 'Api-Key ' . $apiKey;
             } else {
                 // IAM token format
                 $headers['Authorization'] = 'Bearer ' . $apiKey;
@@ -1290,63 +1290,13 @@ PYTHON;
                 $errorMessage = $errorBody['message'] ?? 'Unknown error';
                 $errorCode = $errorBody['code'] ?? $response->status();
                 
-                if ($response->status() === 401 && $isApiKey) {
-                    // Try with Authorization: Api-Key format as fallback (some APIs accept both)
-                    Log::warning('Yandex Vision API: Invalid token (401) with x-api-key format, trying Authorization: Api-Key format', [
-                        'error_code' => $errorCode,
-                        'error_message' => $errorMessage
-                    ]);
-                    
-                    $response = Http::timeout(30)
-                        ->withHeaders([
-                            'Authorization' => 'Api-Key ' . $apiKey,
-                            'Content-Type' => 'application/json'
-                        ])
-                        ->post('https://vision.api.cloud.yandex.net/vision/v1/batchAnalyze', [
-                            'folderId' => $folderId,
-                            'analyzeSpecs' => [
-                                [
-                                    'content' => $base64Image,
-                                    'features' => [
-                                        ['type' => 'TEXT_DETECTION', 'textDetectionConfig' => ['languageCodes' => ['ru', 'en']]]
-                                    ]
-                                ]
-                            ]
-                        ]);
-                    
-                    if ($response->successful()) {
-                        $data = $response->json();
-                        $text = '';
-                        
-                        if (isset($data['results'][0]['results'][0]['textDetection']['pages'][0]['blocks'])) {
-                            foreach ($data['results'][0]['results'][0]['textDetection']['pages'][0]['blocks'] as $block) {
-                                foreach ($block['lines'] ?? [] as $line) {
-                                    foreach ($line['words'] ?? [] as $word) {
-                                        $text .= ($word['text'] ?? '') . ' ';
-                                    }
-                                    $text .= "\n";
-                                }
-                            }
-                        } elseif (isset($data['results'][0]['textDetection']['pages'][0]['blocks'])) {
-                            foreach ($data['results'][0]['textDetection']['pages'][0]['blocks'] as $block) {
-                                foreach ($block['lines'] ?? [] as $line) {
-                                    foreach ($line['words'] ?? [] as $word) {
-                                        $text .= ($word['text'] ?? '') . ' ';
-                                    }
-                                    $text .= "\n";
-                                }
-                            }
-                        }
-                        
-                        if (!empty(trim($text))) {
-                            Log::info('Yandex Vision extracted text (using Bearer format)', [
-                                'text_length' => strlen($text),
-                                'text_preview' => substr($text, 0, 200)
-                            ]);
-                            return trim($text);
-                        }
-                    }
-                }
+                // Log error
+                Log::error('Yandex Vision API: Authentication failed', [
+                    'error_code' => $errorCode,
+                    'error_message' => $errorMessage,
+                    'status' => $response->status(),
+                    'auth_type' => $isApiKey ? 'API-Key' : 'IAM-Token'
+                ]);
                 
                 if ($response->status() === 403) {
                     Log::error('Yandex Vision API: Permission denied (403)', [
