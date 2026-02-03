@@ -1749,11 +1749,30 @@ PYTHON;
             ];
             
             // Normalize spaces in text for better number matching (convert all whitespace to single space)
-            $textNormalized = preg_replace('/[\s\x{00A0}\x{2000}-\x{200B}]+/u', ' ', $text);
+            $textNormalized = preg_replace('/[\s\x{00A0}\x{2000}-\x{200B}\r\n]+/u', ' ', $text);
+            
+            // Also try to find amounts with "Итого" or "Сумма" labels directly
+            // This catches cases like "Итого\n10 000 Р" where number is on next line
+            $directAmountPatterns = [
+                '/итого\s*[:\-]?\s*(\d[\d\s]*\d|\d+)\s*[₽РрPp]/ui',
+                '/сумма\s*[:\-]?\s*(\d[\d\s]*\d|\d+)\s*[₽РрPp]/ui',
+            ];
+            
+            $directAmount = null;
+            foreach ($directAmountPatterns as $pattern) {
+                if (preg_match($pattern, $textNormalized, $directMatch)) {
+                    $numStr = preg_replace('/\s+/', '', $directMatch[1]);
+                    if (is_numeric($numStr)) {
+                        $directAmount = (float) $numStr;
+                        Log::debug('Found direct amount match', ['pattern' => $pattern, 'amount' => $directAmount]);
+                        break;
+                    }
+                }
+            }
 
             // Find all numeric candidates (with optional thousands separators and decimals)
             // Pattern matches: "10 000", "10000", "1 234 567", "123,45", "123.45"
-            if (preg_match_all('/\d{1,3}(?:[\s\x{00A0}]\d{3})+(?:[.,]\d{2})?|\d+(?:[.,]\d{2})?/u', $textNormalized, $numMatches, PREG_OFFSET_CAPTURE)) {
+            if (preg_match_all('/\d{1,3}(?:[\s]\d{3})+(?:[.,]\d{2})?|\d+(?:[.,]\d{2})?/u', $textNormalized, $numMatches, PREG_OFFSET_CAPTURE)) {
                 $candidates = [];
 
                 foreach ($numMatches[0] as [$rawNum, $pos]) {
@@ -1903,6 +1922,15 @@ PYTHON;
                         ]);
                     }
                 }
+            }
+            
+            // If direct pattern match found a higher amount, prefer it (likely more accurate)
+            if ($directAmount && (!$amount || $directAmount > $amount * 0.9)) {
+                Log::info('Using direct pattern amount', [
+                    'direct_amount' => $directAmount,
+                    'scored_amount' => $amount
+                ]);
+                $amount = $directAmount;
             }
 
             if ($amount) {
