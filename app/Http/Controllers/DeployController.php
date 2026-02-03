@@ -73,27 +73,33 @@ class DeployController extends Controller
                 $log[] = 'Fetched latest changes';
             }
             
-            // Reset to remote state (discard local changes)
+            // Stash any local changes
+            $gitStash = Process::path(base_path())->run('git stash');
+            if ($gitStash->successful() && !empty(trim($gitStash->output()))) {
+                $log[] = 'Stashed local changes';
+            }
+            
+            // Reset to remote state (discard any remaining local changes)
             $gitReset = Process::path(base_path())->run('git reset --hard origin/main');
             if ($gitReset->successful()) {
                 $log[] = 'Reset to remote state';
             } else {
-                // If reset failed, try stash and pull
-                $gitStash = Process::path(base_path())->run('git stash');
-                $gitPull = Process::path(base_path())->run('git pull origin main');
-                
-                if (!$gitPull->successful()) {
-                    $errors[] = 'Git pull failed: ' . $gitPull->errorOutput();
+                $errors[] = 'Git reset failed: ' . $gitReset->errorOutput();
+            }
+            
+            // Clean untracked files (but keep .env, storage, vendor, node_modules)
+            // Use git clean with exclusions
+            $gitClean = Process::path(base_path())->run('git clean -fd -e .env -e storage -e vendor -e node_modules -e frontend/node_modules');
+            if ($gitClean->successful()) {
+                $cleanOutput = trim($gitClean->output());
+                if (!empty($cleanOutput)) {
+                    $log[] = 'Cleaned untracked files: ' . $cleanOutput;
                 } else {
-                    $log[] = 'Code updated successfully: ' . $gitPull->output();
+                    $log[] = 'No untracked files to clean';
                 }
             }
             
-            // Clean untracked files (but keep .env, storage, vendor)
-            $gitClean = Process::path(base_path())->run('git clean -fd');
-            if ($gitClean->successful()) {
-                $log[] = 'Cleaned untracked files';
-            }
+            $log[] = 'Code updated successfully';
 
             // Step 2: Ensure composer is installed in bin/composer
             $composerPath = base_path('bin/composer');
