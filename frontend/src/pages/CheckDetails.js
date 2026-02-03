@@ -4,8 +4,8 @@ import { Document, Page, pdfjs } from 'react-pdf';
 import { TransformWrapper, TransformComponent } from 'react-zoom-pan-pinch';
 
 // Настройка worker для pdf.js - используем локальную копию
-// Worker скопирован из node_modules в public папку
-pdfjs.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.mjs';
+// Worker скопирован из node_modules в public папку (переименован в .js для правильного MIME type)
+pdfjs.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.js';
 
 const API_URL = process.env.REACT_APP_API_URL || window.location.origin;
 
