@@ -4,6 +4,12 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\Check;
+use App\Models\Ticket;
+use App\Models\BotSettings;
+use App\Models\TelegramBot;
+use App\Models\AdminActionLog;
+use App\Services\Telegram\TelegramService;
+use App\Services\Telegram\FSM\BotFSM;
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\Storage;
@@ -176,6 +182,141 @@ class CheckController extends Controller
         return response()->file($path, [
             'Content-Type' => $mimeType,
             'Access-Control-Allow-Origin' => '*',
+        ]);
+    }
+
+    /**
+     * Одобрить чек и выдать номерки
+     */
+    public function approve(Request $request, int $id): JsonResponse
+    {
+        $bot = TelegramBot::where('user_id', $request->user()->id)->first();
+        
+        if (!$bot) {
+            return response()->json(['error' => 'Бот не найден'], 404);
+        }
+
+        $check = Check::where('telegram_bot_id', $bot->id)
+            ->where('id', $id)
+            ->firstOrFail();
+
+        if ($check->review_status !== 'pending') {
+            return response()->json(['error' => 'Чек уже обработан'], 400);
+        }
+
+        $request->validate([
+            'amount' => 'nullable|numeric|min:0',
+            'tickets_count' => 'nullable|integer|min:1',
+        ]);
+
+        $settings = BotSettings::getOrCreate($bot->id);
+
+        // Определяем сумму (введённая админом или из чека)
+        $amount = $request->amount ?? $check->final_amount ?? 0;
+
+        // Рассчитываем количество номерков
+        $ticketsCount = $request->tickets_count ?? $settings->calculateTicketsCount($amount);
+
+        if ($ticketsCount < 1) {
+            return response()->json([
+                'error' => "Сумма {$amount} ₽ недостаточна для выдачи номерков. Минимум: {$settings->slot_price} ₽"
+            ], 400);
+        }
+
+        // Проверяем наличие мест
+        if (!$settings->hasEnoughSlots($ticketsCount)) {
+            $available = $settings->getAvailableSlotsCount();
+            return response()->json([
+                'error' => "Недостаточно свободных мест. Требуется: {$ticketsCount}, доступно: {$available}"
+            ], 400);
+        }
+
+        // Получаем пользователя чека
+        $checkUser = $check->botUser;
+        if (!$checkUser) {
+            return response()->json(['error' => 'Пользователь чека не найден'], 400);
+        }
+
+        // Выдаём номерки
+        $tickets = Ticket::issueTickets(
+            $bot->id,
+            $checkUser,
+            $ticketsCount,
+            $check,
+            $settings->slots_mode
+        );
+
+        // Обновляем чек
+        $check->approve($ticketsCount, $request->user()->id, $request->amount);
+
+        // Логируем действие
+        AdminActionLog::logCheckApproved($check, $request->user()->id);
+
+        // Уведомляем пользователя
+        $telegram = new TelegramService($bot);
+        $ticketNumbers = $tickets->pluck('number')->sort()->values()->toArray();
+        $userMessage = $settings->getCheckApprovedMessage($ticketNumbers);
+        $telegram->sendMessage($checkUser->telegram_user_id, $userMessage);
+
+        // Обновляем FSM состояние пользователя
+        $checkUser->setState(BotFSM::STATE_APPROVED);
+
+        return response()->json([
+            'message' => 'Чек одобрен',
+            'tickets_count' => $ticketsCount,
+            'ticket_numbers' => $ticketNumbers,
+            'check' => $check->fresh(),
+        ]);
+    }
+
+    /**
+     * Отклонить чек
+     */
+    public function reject(Request $request, int $id): JsonResponse
+    {
+        $bot = TelegramBot::where('user_id', $request->user()->id)->first();
+        
+        if (!$bot) {
+            return response()->json(['error' => 'Бот не найден'], 404);
+        }
+
+        $check = Check::where('telegram_bot_id', $bot->id)
+            ->where('id', $id)
+            ->firstOrFail();
+
+        if ($check->review_status !== 'pending') {
+            return response()->json(['error' => 'Чек уже обработан'], 400);
+        }
+
+        $request->validate([
+            'reason' => 'nullable|string|max:500',
+        ]);
+
+        $reason = $request->reason ?? 'Проверьте правильность оплаты.';
+
+        // Отклоняем чек
+        $check->reject($request->user()->id, $reason);
+
+        // Логируем действие
+        AdminActionLog::logCheckRejected($check, $request->user()->id, $reason);
+
+        // Уведомляем пользователя
+        $checkUser = $check->botUser;
+        if ($checkUser) {
+            $telegram = new TelegramService($bot);
+            $settings = BotSettings::getOrCreate($bot->id);
+            
+            $checkUser->setState(BotFSM::STATE_REJECTED, ['reject_reason' => $reason]);
+            
+            $userMessage = $settings->getMessage('check_rejected', [
+                'reason' => $reason,
+            ]);
+            $telegram->sendMessage($checkUser->telegram_user_id, $userMessage);
+        }
+
+        return response()->json([
+            'message' => 'Чек отклонён',
+            'check' => $check->fresh(),
         ]);
     }
 

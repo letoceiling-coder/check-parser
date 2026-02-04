@@ -7,8 +7,9 @@ use Illuminate\Support\Facades\Route;
 
 Route::post('/deploy', [DeployController::class, 'deploy']);
 
-// Telegram webhook (public, no auth required)
+// Telegram webhooks (public, no auth required)
 Route::post('/telegram/webhook', [\App\Http\Controllers\Api\TelegramWebhookController::class, 'handle']);
+Route::post('/raffle/webhook', [\App\Http\Controllers\Api\RaffleWebhookController::class, 'handle']);
 
 // Public API for OCR analysis and optimization
 Route::get('/checks/problems', [\App\Http\Controllers\Api\CheckController::class, 'problems']);
@@ -32,10 +33,34 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::put('/bot/{id}/description', [\App\Http\Controllers\Api\BotController::class, 'updateDescription']);
     Route::post('/bot/{id}/test-webhook', [\App\Http\Controllers\Api\BotController::class, 'testWebhook']);
     
+    // Raffle settings routes
+    Route::get('/bot/{id}/raffle-settings', [\App\Http\Controllers\Api\RaffleSettingsController::class, 'show']);
+    Route::put('/bot/{id}/raffle-settings', [\App\Http\Controllers\Api\RaffleSettingsController::class, 'update']);
+    Route::post('/bot/{id}/raffle-settings/upload-qr', [\App\Http\Controllers\Api\RaffleSettingsController::class, 'uploadQr']);
+    Route::post('/bot/{id}/raffle-settings/initialize-tickets', [\App\Http\Controllers\Api\RaffleSettingsController::class, 'initializeTickets']);
+    
     // Check routes
     Route::get('/checks', [\App\Http\Controllers\Api\CheckController::class, 'index']);
     Route::get('/checks/stats', [\App\Http\Controllers\Api\CheckController::class, 'stats']);
     Route::get('/checks/{id}', [\App\Http\Controllers\Api\CheckController::class, 'show']);
     Route::put('/checks/{id}', [\App\Http\Controllers\Api\CheckController::class, 'update']);
     Route::delete('/checks/{id}', [\App\Http\Controllers\Api\CheckController::class, 'destroy']);
+    Route::put('/checks/{id}/approve', [\App\Http\Controllers\Api\CheckController::class, 'approve']);
+    Route::put('/checks/{id}/reject', [\App\Http\Controllers\Api\CheckController::class, 'reject']);
+    
+    // Admin requests routes
+    Route::get('/admin-requests', [\App\Http\Controllers\Api\AdminRequestController::class, 'index']);
+    Route::put('/admin-requests/{id}/approve', [\App\Http\Controllers\Api\AdminRequestController::class, 'approve']);
+    Route::put('/admin-requests/{id}/reject', [\App\Http\Controllers\Api\AdminRequestController::class, 'reject']);
+    
+    // Tickets routes
+    Route::get('/tickets', [\App\Http\Controllers\Api\TicketController::class, 'index']);
+    Route::get('/tickets/stats', [\App\Http\Controllers\Api\TicketController::class, 'stats']);
+    
+    // Bot users routes
+    Route::get('/bot-users', [\App\Http\Controllers\Api\BotUserController::class, 'index']);
+    Route::get('/bot-users/{id}', [\App\Http\Controllers\Api\BotUserController::class, 'show']);
+    
+    // Admin actions log
+    Route::get('/admin-actions', [\App\Http\Controllers\Api\AdminActionLogController::class, 'index']);
 });
