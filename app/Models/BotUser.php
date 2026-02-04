@@ -40,6 +40,21 @@ class BotUser extends Model
         'inn_encrypted',
     ];
 
+    public const ROLE_USER = 'user';
+    public const ROLE_ADMIN = 'admin';
+
+    public const STATE_IDLE = 'IDLE';
+    public const STATE_WELCOME = 'WELCOME';
+    public const STATE_WAIT_FIO = 'WAIT_FIO';
+    public const STATE_WAIT_PHONE = 'WAIT_PHONE';
+    public const STATE_WAIT_INN = 'WAIT_INN';
+    public const STATE_CONFIRM_DATA = 'CONFIRM_DATA';
+    public const STATE_SHOW_QR = 'SHOW_QR';
+    public const STATE_WAIT_CHECK = 'WAIT_CHECK';
+    public const STATE_PENDING_REVIEW = 'PENDING_REVIEW';
+    public const STATE_APPROVED = 'APPROVED';
+    public const STATE_REJECTED = 'REJECTED';
+
     // ==========================================
     // Шифрование/расшифровка персональных данных
     // ==========================================
