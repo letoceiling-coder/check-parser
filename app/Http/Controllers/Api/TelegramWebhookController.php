@@ -8,6 +8,7 @@ use App\Models\TelegramBot;
 use App\Models\BotUser;
 use App\Models\BotSettings;
 use App\Models\Raffle;
+use App\Services\Telegram\TelegramMenuService;
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\Http;
@@ -126,6 +127,7 @@ class TelegramWebhookController extends Controller
         if ($isRaffleMode) {
             // Get or create BotUser for FSM
             $botUser = $this->getOrCreateBotUser($bot, $telegramUserId, $userData);
+            $menuService = new TelegramMenuService($bot);
             
             // Handle /start command in raffle mode
             if ($text && str_starts_with($text, '/start')) {
@@ -144,6 +146,33 @@ class TelegramWebhookController extends Controller
                 $this->handleStatusCommand($bot, $botUser, $chatId);
                 return;
             }
+            
+            // === Обработка кнопок постоянного меню ===
+            if ($text === TelegramMenuService::BTN_HOME) {
+                // Полный сброс FSM и возврат на стартовый экран
+                $botUser->update(['fsm_state' => BotUser::STATE_IDLE]);
+                $this->handleRaffleStart($bot, $botUser, $chatId, $botSettings);
+                return;
+            }
+            
+            if ($text === TelegramMenuService::BTN_ABOUT) {
+                // Информация о розыгрыше (FSM не меняем)
+                $menuService->handleAboutRaffle($chatId, $botUser);
+                return;
+            }
+            
+            if ($text === TelegramMenuService::BTN_MY_TICKETS) {
+                // Мои номерки (FSM не меняем)
+                $menuService->handleMyTickets($chatId, $botUser);
+                return;
+            }
+            
+            if ($text === TelegramMenuService::BTN_SUPPORT) {
+                // Поддержка (FSM не меняем)
+                $menuService->handleSupport($chatId);
+                return;
+            }
+            // === Конец обработки кнопок меню ===
             
             // Handle FSM states
             $this->handleRaffleFSM($bot, $botUser, $chatId, $message, $botSettings);
@@ -199,6 +228,11 @@ class TelegramWebhookController extends Controller
     {
         Log::info('Handling raffle /start', ['bot_id' => $bot->id, 'user_id' => $botUser->id]);
         
+        // Удаляем предыдущее inline сообщение если есть
+        if ($botUser->last_bot_message_id) {
+            $this->deleteMessage($bot, $chatId, $botUser->last_bot_message_id);
+        }
+        
         // Check available slots
         $availableSlots = $settings->getAvailableSlotsCount();
         
@@ -207,16 +241,14 @@ class TelegramWebhookController extends Controller
             $message = $settings->msg_no_slots ?? "К сожалению, все места уже заняты.\n\nСледите за новостями!";
             $message = str_replace('{total_slots}', $settings->total_slots, $message);
             
-            $keyboard = [
-                'inline_keyboard' => [
-                    [['text' => '🏠 В начало', 'callback_data' => 'home']]
-                ]
-            ];
-            
-            $this->sendMessageWithKeyboard($bot, $chatId, $message, $keyboard);
-            $botUser->update(['fsm_state' => BotUser::STATE_IDLE]);
+            // Отправляем с постоянной клавиатурой (без inline кнопок)
+            $this->sendMessage($bot, $chatId, $message, true);
+            $botUser->update(['fsm_state' => BotUser::STATE_IDLE, 'last_bot_message_id' => null]);
             return;
         }
+        
+        // Отправляем сначала сообщение с постоянной клавиатурой
+        $this->sendMessage($bot, $chatId, "⌨️ Меню активировано", true);
         
         // Show welcome with price
         $message = $settings->msg_welcome ?? "Добро пожаловать в розыгрыш! 🎉\n\nСтоимость участия: {price} ₽ = 1 номерок\nДоступно мест: {available_slots} из {total_slots}\n\nНажмите \"Участвовать\" чтобы начать!";
@@ -224,14 +256,14 @@ class TelegramWebhookController extends Controller
         $message = str_replace('{available_slots}', $availableSlots, $message);
         $message = str_replace('{total_slots}', $settings->total_slots, $message);
         
-        $keyboard = [
+        // Inline кнопки для участия
+        $inlineKeyboard = [
             'inline_keyboard' => [
                 [['text' => '🎉 Участвовать', 'callback_data' => 'participate']],
-                [['text' => '❌ Отмена', 'callback_data' => 'cancel']]
             ]
         ];
         
-        $result = $this->sendMessageWithKeyboard($bot, $chatId, $message, $keyboard);
+        $result = $this->sendMessageWithKeyboard($bot, $chatId, $message, $inlineKeyboard);
         
         // Save message ID for editing
         if ($result && isset($result['message_id'])) {
@@ -2991,8 +3023,11 @@ PYTHON;
         switch ($data) {
             case 'cancel':
             case 'home':
-                $botUser->update(['fsm_state' => BotUser::STATE_IDLE]);
-                $this->editMessageText($bot, $chatId, $messageId, "Действие отменено.\n\nОтправьте /start чтобы начать заново.");
+                $botUser->update(['fsm_state' => BotUser::STATE_IDLE, 'last_bot_message_id' => null]);
+                // Удаляем inline сообщение
+                $this->deleteMessage($bot, $chatId, $messageId);
+                // Отправляем сообщение с постоянным меню
+                $this->sendMessage($bot, $chatId, "❌ Действие отменено.\n\nИспользуйте меню для навигации или нажмите 🏠 Главная для начала.");
                 return;
 
             case 'back':
@@ -3228,9 +3263,30 @@ PYTHON;
     }
 
     /**
-     * Send message to user
+     * Получить Reply Keyboard для постоянного меню
      */
-    private function sendMessage(TelegramBot $bot, int $chatId, string $text): ?array
+    private function getReplyKeyboard(): array
+    {
+        return [
+            'keyboard' => [
+                [
+                    ['text' => TelegramMenuService::BTN_HOME],
+                    ['text' => TelegramMenuService::BTN_ABOUT],
+                ],
+                [
+                    ['text' => TelegramMenuService::BTN_MY_TICKETS],
+                    ['text' => TelegramMenuService::BTN_SUPPORT],
+                ],
+            ],
+            'resize_keyboard' => true,
+            'is_persistent' => true,
+        ];
+    }
+
+    /**
+     * Send message to user with Reply Keyboard
+     */
+    private function sendMessage(TelegramBot $bot, int $chatId, string $text, bool $withMenu = true): ?array
     {
         try {
             Log::info('Sending message to Telegram', [
@@ -3239,12 +3295,19 @@ PYTHON;
                 'text_length' => strlen($text)
             ]);
             
+            $params = [
+                'chat_id' => $chatId,
+                'text' => $text,
+                'parse_mode' => 'HTML',
+            ];
+            
+            // Добавляем постоянную клавиатуру если нужно
+            if ($withMenu) {
+                $params['reply_markup'] = json_encode($this->getReplyKeyboard());
+            }
+            
             $response = Http::timeout(10)
-                ->post("https://api.telegram.org/bot{$bot->token}/sendMessage", [
-                    'chat_id' => $chatId,
-                    'text' => $text,
-                    'parse_mode' => 'HTML',
-                ]);
+                ->post("https://api.telegram.org/bot{$bot->token}/sendMessage", $params);
 
             if ($response->successful()) {
                 Log::info('Message sent successfully');
@@ -3264,7 +3327,7 @@ PYTHON;
     }
 
     /**
-     * Send message with inline keyboard
+     * Send message with inline keyboard (Reply Keyboard stays visible)
      */
     private function sendMessageWithKeyboard(TelegramBot $bot, int $chatId, string $text, array $keyboard): ?array
     {
@@ -3284,6 +3347,71 @@ PYTHON;
             Log::error('Error sending message with keyboard: ' . $e->getMessage());
         }
         return null;
+    }
+
+    /**
+     * Send message with Reply Keyboard and then Inline buttons
+     * Отправляет сначала Reply Keyboard, затем сообщение с Inline кнопками
+     */
+    private function sendMessageWithReplyAndInline(TelegramBot $bot, int $chatId, string $text, array $inlineKeyboard): ?array
+    {
+        try {
+            // Сначала устанавливаем Reply Keyboard пустым сообщением (не видно пользователю)
+            // Но это не нужно - Telegram сохраняет Reply Keyboard пока мы его явно не уберём
+            
+            // Отправляем сообщение с Inline кнопками
+            $response = Http::timeout(10)
+                ->post("https://api.telegram.org/bot{$bot->token}/sendMessage", [
+                    'chat_id' => $chatId,
+                    'text' => $text,
+                    'parse_mode' => 'HTML',
+                    'reply_markup' => json_encode([
+                        'inline_keyboard' => $inlineKeyboard,
+                    ]),
+                ]);
+
+            if ($response->successful()) {
+                return $response->json('result');
+            }
+        } catch (\Exception $e) {
+            Log::error('Error sending message with reply and inline: ' . $e->getMessage());
+        }
+        return null;
+    }
+
+    /**
+     * Установить постоянную клавиатуру (Reply Keyboard)
+     */
+    private function setReplyKeyboard(TelegramBot $bot, int $chatId): void
+    {
+        try {
+            Http::timeout(10)->post("https://api.telegram.org/bot{$bot->token}/sendMessage", [
+                'chat_id' => $chatId,
+                'text' => '⌨️',
+                'reply_markup' => json_encode($this->getReplyKeyboard()),
+            ]);
+        } catch (\Exception $e) {
+            Log::error('Error setting reply keyboard: ' . $e->getMessage());
+        }
+    }
+
+    /**
+     * Удалить сообщение
+     */
+    private function deleteMessage(TelegramBot $bot, int $chatId, int $messageId): bool
+    {
+        try {
+            $response = Http::timeout(10)
+                ->post("https://api.telegram.org/bot{$bot->token}/deleteMessage", [
+                    'chat_id' => $chatId,
+                    'message_id' => $messageId,
+                ]);
+
+            return $response->successful();
+        } catch (\Exception $e) {
+            Log::error('Error deleting message: ' . $e->getMessage());
+            return false;
+        }
     }
 
     /**

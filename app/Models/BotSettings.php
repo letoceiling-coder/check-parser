@@ -16,6 +16,9 @@ class BotSettings extends Model
         'is_active',
         'qr_image_path',
         'payment_description',
+        'support_contact',
+        'raffle_info',
+        'prize_description',
         'msg_welcome',
         'msg_no_slots',
         'msg_ask_fio',
@@ -31,6 +34,10 @@ class BotSettings extends Model
         'msg_admin_request_sent',
         'msg_admin_request_approved',
         'msg_admin_request_rejected',
+        'msg_about_raffle',
+        'msg_my_tickets',
+        'msg_no_tickets',
+        'msg_support',
     ];
 
     protected $casts = [
@@ -73,6 +80,14 @@ class BotSettings extends Model
         'msg_admin_request_approved' => "✅ Поздравляем! Вам выдана роль администратора.\n\nТеперь вы будете получать уведомления о новых чеках.",
         
         'msg_admin_request_rejected' => "❌ Запрос на роль администратора отклонён.\n\n{reason}",
+        
+        'msg_about_raffle' => "ℹ️ О розыгрыше\n\n🎁 Приз: {prize}\n💰 Стоимость: {price} ₽ = 1 номерок\n📊 Всего мест: {total_slots}\n✅ Свободно: {available_slots}\n\n{raffle_info}",
+        
+        'msg_my_tickets' => "🎫 Ваши номерки:\n\n{tickets}\n\nВсего: {count} шт.",
+        
+        'msg_no_tickets' => "🎫 У вас пока нет номерков.\n\nНажмите «🏠 Главная» чтобы участвовать в розыгрыше!",
+        
+        'msg_support' => "💬 Поддержка\n\nПо всем вопросам обращайтесь: {support_contact}",
     ];
 
     // ==========================================

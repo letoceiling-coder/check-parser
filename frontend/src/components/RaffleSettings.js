@@ -17,6 +17,9 @@ function RaffleSettings({ bot }) {
     slots_mode: 'sequential',
     is_active: true,
     payment_description: 'Оплата наклейки',
+    support_contact: '',
+    raffle_info: '',
+    prize_description: '',
   });
 
   const [messages, setMessages] = useState({});
@@ -48,7 +51,10 @@ function RaffleSettings({ bot }) {
           slot_price: data.settings.slot_price,
           slots_mode: data.settings.slots_mode,
           is_active: data.settings.is_active,
-          payment_description: data.settings.payment_description,
+          payment_description: data.settings.payment_description || '',
+          support_contact: data.settings.support_contact || '',
+          raffle_info: data.settings.raffle_info || '',
+          prize_description: data.settings.prize_description || '',
         });
 
         // Заполняем сообщения
@@ -325,6 +331,51 @@ function RaffleSettings({ bot }) {
             </label>
           </div>
 
+          {/* Информация о розыгрыше */}
+          <div className="pt-4 border-t">
+            <h4 className="font-medium text-gray-800 mb-4">📢 Информация для пользователей</h4>
+            
+            <div className="grid grid-cols-2 gap-6 mb-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Описание приза
+                </label>
+                <input
+                  type="text"
+                  value={formData.prize_description}
+                  onChange={(e) => setFormData({ ...formData, prize_description: e.target.value })}
+                  placeholder="Например: iPhone 15 Pro"
+                  className="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-purple-500"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Контакт поддержки
+                </label>
+                <input
+                  type="text"
+                  value={formData.support_contact}
+                  onChange={(e) => setFormData({ ...formData, support_contact: e.target.value })}
+                  placeholder="@support или https://t.me/support"
+                  className="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-purple-500"
+                />
+              </div>
+            </div>
+            
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Дополнительная информация о розыгрыше
+              </label>
+              <textarea
+                value={formData.raffle_info}
+                onChange={(e) => setFormData({ ...formData, raffle_info: e.target.value })}
+                placeholder="Условия участия, правила розыгрыша..."
+                rows={3}
+                className="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-purple-500 resize-none"
+              />
+            </div>
+          </div>
+
           <div className="pt-4 border-t">
             <button
               onClick={handleInitializeTickets}
@@ -389,6 +440,7 @@ function RaffleSettings({ bot }) {
           </p>
 
           <div className="space-y-4">
+            <h4 className="font-medium text-gray-800 mb-2">🎯 Сценарий участия</h4>
             {[
               { key: 'welcome', label: 'Приветствие (места есть)', placeholder: 'Добро пожаловать в розыгрыш...' },
               { key: 'no_slots', label: 'Нет мест', placeholder: 'К сожалению, все места заняты...' },
@@ -402,6 +454,31 @@ function RaffleSettings({ bot }) {
               { key: 'check_approved', label: 'Чек одобрен', placeholder: 'Платёж подтверждён! Ваши номерки: {tickets}' },
               { key: 'check_rejected', label: 'Чек отклонён', placeholder: 'Чек не принят. {reason}' },
               { key: 'check_duplicate', label: '⚠️ Дубликат чека', placeholder: 'Этот чек уже был использован! {status_info}' },
+            ].map(({ key, label, placeholder }) => (
+              <div key={key}>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  {label}
+                </label>
+                <textarea
+                  value={messages[key] || ''}
+                  onChange={(e) => setMessages({ ...messages, [key]: e.target.value })}
+                  placeholder={placeholder}
+                  rows={3}
+                  className="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-purple-500 resize-none"
+                />
+              </div>
+            ))}
+
+            <h4 className="font-medium text-gray-800 mt-6 mb-2 pt-4 border-t">📱 Постоянное меню</h4>
+            <p className="text-sm text-gray-500 mb-4">
+              Эти сообщения отображаются при нажатии кнопок постоянного меню.
+              Переменные: {'{prize}'}, {'{price}'}, {'{total_slots}'}, {'{available_slots}'}, {'{raffle_info}'}, {'{tickets}'}, {'{count}'}, {'{support_contact}'}
+            </p>
+            {[
+              { key: 'about_raffle', label: 'ℹ️ О розыгрыше', placeholder: 'Информация о розыгрыше: {prize}, {price} ₽...' },
+              { key: 'my_tickets', label: '🎫 Мои номерки (есть номерки)', placeholder: 'Ваши номерки: {tickets}. Всего: {count} шт.' },
+              { key: 'no_tickets', label: '🎫 Мои номерки (нет номерков)', placeholder: 'У вас пока нет номерков...' },
+              { key: 'support', label: '💬 Поддержка', placeholder: 'По всем вопросам: {support_contact}' },
             ].map(({ key, label, placeholder }) => (
               <div key={key}>
                 <label className="block text-sm font-medium text-gray-700 mb-1">

@@ -52,6 +52,9 @@ class RaffleSettingsController extends Controller
             'slots_mode' => 'nullable|in:sequential,random',
             'is_active' => 'nullable|boolean',
             'payment_description' => 'nullable|string|max:255',
+            'support_contact' => 'nullable|string|max:255',
+            'raffle_info' => 'nullable|string|max:4000',
+            'prize_description' => 'nullable|string|max:500',
             // Сообщения бота
             'msg_welcome' => 'nullable|string|max:4000',
             'msg_no_slots' => 'nullable|string|max:4000',
@@ -68,6 +71,10 @@ class RaffleSettingsController extends Controller
             'msg_admin_request_sent' => 'nullable|string|max:4000',
             'msg_admin_request_approved' => 'nullable|string|max:4000',
             'msg_admin_request_rejected' => 'nullable|string|max:4000',
+            'msg_about_raffle' => 'nullable|string|max:4000',
+            'msg_my_tickets' => 'nullable|string|max:4000',
+            'msg_no_tickets' => 'nullable|string|max:4000',
+            'msg_support' => 'nullable|string|max:4000',
         ]);
 
         // Обновляем только переданные поля
