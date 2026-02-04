@@ -10,6 +10,7 @@ class Check extends Model
 {
     protected $fillable = [
         'telegram_bot_id',
+        'raffle_id',
         'bot_user_id',
         'chat_id',
         'username',
@@ -69,6 +70,11 @@ class Check extends Model
     public function botUser(): BelongsTo
     {
         return $this->belongsTo(BotUser::class);
+    }
+
+    public function raffle(): BelongsTo
+    {
+        return $this->belongsTo(Raffle::class);
     }
 
     public function reviewer(): BelongsTo

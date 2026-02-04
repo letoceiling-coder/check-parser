@@ -8,6 +8,7 @@ function Sidebar({ isOpen, onToggle, user, onLogout }) {
     { id: 'dashboard', label: 'Главная', icon: '🏠', path: '/' },
     { id: 'checks', label: 'Чеки', icon: '🧾', path: '/checks' },
     { id: 'tickets', label: 'Номерки', icon: '🎫', path: '/tickets' },
+    { id: 'raffles', label: 'Розыгрыши', icon: '🎰', path: '/raffles' },
     { id: 'admin-requests', label: 'Запросы на роли', icon: '👤', path: '/admin-requests' },
     { id: 'bot-users', label: 'Пользователи', icon: '👥', path: '/bot-users' },
     { id: 'bot', label: 'Настройки бота', icon: '🤖', path: '/bot' },

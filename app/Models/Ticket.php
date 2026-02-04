@@ -10,6 +10,7 @@ class Ticket extends Model
 {
     protected $fillable = [
         'telegram_bot_id',
+        'raffle_id',
         'number',
         'bot_user_id',
         'check_id',
@@ -38,6 +39,11 @@ class Ticket extends Model
     public function check(): BelongsTo
     {
         return $this->belongsTo(Check::class);
+    }
+
+    public function raffle(): BelongsTo
+    {
+        return $this->belongsTo(Raffle::class);
     }
 
     // ==========================================
@@ -80,10 +86,11 @@ class Ticket extends Model
     /**
      * Выдать номерок пользователю
      */
-    public function issueTo(BotUser $botUser, ?Check $check = null): self
+    public function issueTo(BotUser $botUser, ?Check $check = null, ?int $raffleId = null): self
     {
         $this->bot_user_id = $botUser->id;
         $this->check_id = $check?->id;
+        $this->raffle_id = $raffleId ?? $check?->raffle_id;
         $this->issued_at = now();
         $this->save();
         return $this;
@@ -91,12 +98,16 @@ class Ticket extends Model
 
     /**
      * Вернуть номерок в пул (отменить выдачу)
+     * @param bool $keepRaffle - сохранить привязку к розыгрышу (для истории)
      */
-    public function revoke(): self
+    public function revoke(bool $keepRaffle = false): self
     {
         $this->bot_user_id = null;
         $this->check_id = null;
         $this->issued_at = null;
+        if (!$keepRaffle) {
+            $this->raffle_id = null;
+        }
         $this->save();
         return $this;
     }
@@ -106,19 +117,25 @@ class Ticket extends Model
     // ==========================================
 
     /**
-     * Инициализировать номерки для бота
+     * Инициализировать номерки для бота (или розыгрыша)
      */
-    public static function initializeForBot(int $telegramBotId, int $totalSlots): void
+    public static function initializeForBot(int $telegramBotId, int $totalSlots, ?int $raffleId = null): void
     {
-        $existingNumbers = self::where('telegram_bot_id', $telegramBotId)
-            ->pluck('number')
-            ->toArray();
+        $query = self::where('telegram_bot_id', $telegramBotId);
+        
+        // Если указан розыгрыш, проверяем номерки для этого розыгрыша
+        if ($raffleId) {
+            $query->where('raffle_id', $raffleId);
+        }
+        
+        $existingNumbers = $query->pluck('number')->toArray();
 
         $toCreate = [];
         for ($i = 1; $i <= $totalSlots; $i++) {
             if (!in_array($i, $existingNumbers)) {
                 $toCreate[] = [
                     'telegram_bot_id' => $telegramBotId,
+                    'raffle_id' => $raffleId,
                     'number' => $i,
                     'created_at' => now(),
                     'updated_at' => now(),
@@ -141,11 +158,17 @@ class Ticket extends Model
         BotUser $botUser,
         int $count,
         ?Check $check = null,
-        string $mode = 'sequential'
+        string $mode = 'sequential',
+        ?int $raffleId = null
     ): Collection {
         $query = self::where('telegram_bot_id', $telegramBotId)
             ->whereNull('bot_user_id')
             ->limit($count);
+
+        // Если указан розыгрыш, выдаём номерки из этого розыгрыша
+        if ($raffleId) {
+            $query->where('raffle_id', $raffleId);
+        }
 
         if ($mode === 'sequential') {
             $query->orderBy('number', 'asc');
@@ -156,10 +179,45 @@ class Ticket extends Model
         $tickets = $query->get();
 
         foreach ($tickets as $ticket) {
-            $ticket->issueTo($botUser, $check);
+            $ticket->issueTo($botUser, $check, $raffleId);
         }
 
         return $tickets;
+    }
+
+    /**
+     * Сбросить все номерки для розыгрыша (для нового розыгрыша)
+     */
+    public static function resetForRaffle(int $raffleId): int
+    {
+        return self::where('raffle_id', $raffleId)
+            ->update([
+                'bot_user_id' => null,
+                'check_id' => null,
+                'issued_at' => null,
+            ]);
+    }
+
+    /**
+     * Подготовить номерки для нового розыгрыша
+     */
+    public static function prepareForNewRaffle(int $telegramBotId, int $newRaffleId, int $totalSlots): void
+    {
+        // Обновляем существующие номерки - привязываем к новому розыгрышу и сбрасываем владельцев
+        self::where('telegram_bot_id', $telegramBotId)
+            ->whereNull('raffle_id')
+            ->orWhere(function ($query) use ($telegramBotId) {
+                $query->where('telegram_bot_id', $telegramBotId);
+            })
+            ->update([
+                'raffle_id' => $newRaffleId,
+                'bot_user_id' => null,
+                'check_id' => null,
+                'issued_at' => null,
+            ]);
+        
+        // Инициализируем недостающие номерки
+        self::initializeForBot($telegramBotId, $totalSlots, $newRaffleId);
     }
 
     /**

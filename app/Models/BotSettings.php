@@ -9,6 +9,7 @@ class BotSettings extends Model
 {
     protected $fillable = [
         'telegram_bot_id',
+        'current_raffle_id',
         'total_slots',
         'slot_price',
         'slots_mode',
@@ -81,6 +82,11 @@ class BotSettings extends Model
     public function telegramBot(): BelongsTo
     {
         return $this->belongsTo(TelegramBot::class);
+    }
+
+    public function currentRaffle(): BelongsTo
+    {
+        return $this->belongsTo(Raffle::class, 'current_raffle_id');
     }
 
     // ==========================================

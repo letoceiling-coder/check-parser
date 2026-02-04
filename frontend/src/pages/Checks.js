@@ -1,5 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Link } from 'react-router-dom';
+import CompleteRaffleModal from '../components/CompleteRaffleModal';
+import NewRaffleModal from '../components/NewRaffleModal';
 
 const API_URL = process.env.REACT_APP_API_URL || window.location.origin;
 
@@ -15,6 +17,13 @@ function Checks() {
     ocr_method: 'all',
     search: '',
   });
+  
+  // Raffle state
+  const [botId, setBotId] = useState(null);
+  const [currentRaffle, setCurrentRaffle] = useState(null);
+  const [showCompleteModal, setShowCompleteModal] = useState(false);
+  const [showNewRaffleModal, setShowNewRaffleModal] = useState(false);
+  const [raffleSuccess, setRaffleSuccess] = useState(null);
 
   const fetchChecks = useCallback(async (page = 1) => {
     setLoading(true);
@@ -70,10 +79,75 @@ function Checks() {
     }
   }, []);
 
+  const fetchBot = useCallback(async () => {
+    try {
+      const token = localStorage.getItem('token');
+      const response = await fetch(`${API_URL}/api/bot`, {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Accept': 'application/json',
+        },
+      });
+
+      if (response.ok) {
+        const bots = await response.json();
+        if (bots.length > 0) {
+          setBotId(bots[0].id);
+        }
+      }
+    } catch (err) {
+      console.error('Error fetching bot:', err);
+    }
+  }, []);
+
+  const fetchCurrentRaffle = useCallback(async () => {
+    if (!botId) return;
+    
+    try {
+      const token = localStorage.getItem('token');
+      const response = await fetch(`${API_URL}/api/bot/${botId}/raffles/current`, {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Accept': 'application/json',
+        },
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        setCurrentRaffle(data.raffle);
+      }
+    } catch (err) {
+      console.error('Error fetching current raffle:', err);
+    }
+  }, [botId]);
+
+  useEffect(() => {
+    fetchBot();
+  }, [fetchBot]);
+
+  useEffect(() => {
+    if (botId) {
+      fetchCurrentRaffle();
+    }
+  }, [botId, fetchCurrentRaffle]);
+
   useEffect(() => {
     fetchChecks(currentPage);
     fetchStats();
   }, [fetchChecks, fetchStats, currentPage]);
+
+  const handleRaffleComplete = (data) => {
+    setRaffleSuccess(`🏆 Розыгрыш завершён! Победитель: №${data.winner.ticket_number}`);
+    setCurrentRaffle(null);
+    fetchCurrentRaffle();
+    setTimeout(() => setRaffleSuccess(null), 5000);
+  };
+
+  const handleNewRaffle = (data) => {
+    setRaffleSuccess(`🎯 Новый розыгрыш "${data.raffle.name}" начат!`);
+    setCurrentRaffle(data.raffle);
+    setTimeout(() => setRaffleSuccess(null), 5000);
+  };
 
   const handleFilterChange = (key, value) => {
     setFilters(prev => ({ ...prev, [key]: value }));
@@ -135,11 +209,77 @@ function Checks() {
 
   return (
     <div className="p-6">
+      {/* Modals */}
+      <CompleteRaffleModal
+        isOpen={showCompleteModal}
+        onClose={() => setShowCompleteModal(false)}
+        botId={botId}
+        onComplete={handleRaffleComplete}
+      />
+      <NewRaffleModal
+        isOpen={showNewRaffleModal}
+        onClose={() => setShowNewRaffleModal(false)}
+        botId={botId}
+        onCreated={handleNewRaffle}
+      />
+
       {/* Header */}
-      <div className="mb-6">
-        <h1 className="text-2xl font-bold text-gray-800">🧾 Чеки</h1>
-        <p className="text-gray-600">История обработанных чеков и статистика</p>
+      <div className="mb-6 flex justify-between items-start">
+        <div>
+          <h1 className="text-2xl font-bold text-gray-800">🧾 Чеки</h1>
+          <p className="text-gray-600">История обработанных чеков и статистика</p>
+        </div>
+        
+        {/* Raffle Controls */}
+        {botId && (
+          <div className="flex gap-3">
+            <Link
+              to="/raffles"
+              className="px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition-colors font-medium"
+            >
+              📜 История розыгрышей
+            </Link>
+            <button
+              onClick={() => setShowCompleteModal(true)}
+              className="px-4 py-2 bg-gradient-to-r from-purple-500 to-indigo-600 text-white rounded-lg hover:from-purple-600 hover:to-indigo-700 transition-colors font-medium shadow-md"
+            >
+              🏆 Завершить розыгрыш
+            </button>
+            <button
+              onClick={() => setShowNewRaffleModal(true)}
+              className="px-4 py-2 bg-gradient-to-r from-green-500 to-emerald-600 text-white rounded-lg hover:from-green-600 hover:to-emerald-700 transition-colors font-medium shadow-md"
+            >
+              🔄 Новый розыгрыш
+            </button>
+          </div>
+        )}
       </div>
+
+      {/* Success Message */}
+      {raffleSuccess && (
+        <div className="bg-green-50 border border-green-200 text-green-700 px-4 py-3 rounded-lg mb-6 flex items-center gap-3">
+          <span className="text-2xl">✅</span>
+          <span>{raffleSuccess}</span>
+        </div>
+      )}
+
+      {/* Current Raffle Info */}
+      {currentRaffle && (
+        <div className="bg-gradient-to-r from-purple-50 to-indigo-50 border border-purple-200 rounded-xl p-4 mb-6">
+          <div className="flex justify-between items-center">
+            <div>
+              <h3 className="font-semibold text-purple-800">{currentRaffle.name}</h3>
+              <p className="text-sm text-purple-600">
+                Участников: {currentRaffle.total_participants || 0} • 
+                Номерков: {currentRaffle.tickets_issued || 0} / {currentRaffle.total_slots}
+              </p>
+            </div>
+            <span className="px-3 py-1 bg-green-100 text-green-800 rounded-full text-sm font-medium">
+              🟢 Активен
+            </span>
+          </div>
+        </div>
+      )}
 
       {/* Stats Cards */}
       {stats && (

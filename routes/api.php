@@ -63,4 +63,13 @@ Route::middleware('auth:sanctum')->group(function () {
     
     // Admin actions log
     Route::get('/admin-actions', [\App\Http\Controllers\Api\AdminActionLogController::class, 'index']);
+    
+    // Raffles routes
+    Route::get('/bot/{botId}/raffles', [\App\Http\Controllers\Api\RaffleController::class, 'index']);
+    Route::get('/bot/{botId}/raffles/current', [\App\Http\Controllers\Api\RaffleController::class, 'current']);
+    Route::get('/bot/{botId}/raffles/participants', [\App\Http\Controllers\Api\RaffleController::class, 'getParticipants']);
+    Route::get('/bot/{botId}/raffles/{raffleId}', [\App\Http\Controllers\Api\RaffleController::class, 'show']);
+    Route::post('/bot/{botId}/raffles/complete', [\App\Http\Controllers\Api\RaffleController::class, 'complete']);
+    Route::post('/bot/{botId}/raffles/reset', [\App\Http\Controllers\Api\RaffleController::class, 'reset']);
+    Route::post('/bot/{botId}/raffles/cancel', [\App\Http\Controllers\Api\RaffleController::class, 'cancel']);
 });

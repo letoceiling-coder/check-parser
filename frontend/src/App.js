@@ -9,6 +9,7 @@ import CheckDetails from './pages/CheckDetails';
 import Tickets from './pages/Tickets';
 import AdminRequests from './pages/AdminRequests';
 import BotUsers from './pages/BotUsers';
+import Raffles from './pages/Raffles';
 import './App.css';
 
 const API_URL = process.env.REACT_APP_API_URL || window.location.origin;
@@ -125,6 +126,7 @@ function App() {
                   <Route path="/checks" element={<Checks />} />
                   <Route path="/checks/:id" element={<CheckDetails />} />
                   <Route path="/tickets" element={<Tickets />} />
+                  <Route path="/raffles" element={<Raffles />} />
                   <Route path="/admin-requests" element={<AdminRequests />} />
                   <Route path="/bot-users" element={<BotUsers />} />
                   <Route path="/bot" element={<Bot />} />

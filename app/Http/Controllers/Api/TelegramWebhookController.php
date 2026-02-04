@@ -7,6 +7,7 @@ use App\Models\Check;
 use App\Models\TelegramBot;
 use App\Models\BotUser;
 use App\Models\BotSettings;
+use App\Models\Raffle;
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\Http;
@@ -548,6 +549,9 @@ class TelegramWebhookController extends Controller
             
             // === КОНЕЦ ПРОВЕРКИ ДУБЛИКАТОВ ===
             
+            // Получаем или создаём текущий розыгрыш
+            $currentRaffle = Raffle::getOrCreateForBot($bot->id);
+            
             // Очистка текста от проблемных символов для MySQL
             $rawText = null;
             if (isset($checkData['raw_text'])) {
@@ -567,6 +571,7 @@ class TelegramWebhookController extends Controller
             // Create check record
             $check = Check::create([
                 'telegram_bot_id' => $bot->id,
+                'raffle_id' => $currentRaffle->id,
                 'chat_id' => $chatId,
                 'username' => $userData['username'],
                 'first_name' => $firstName,
