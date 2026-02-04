@@ -1,0 +1,236 @@
+<?php
+
+namespace App\Models;
+
+use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
+
+class BotSettings extends Model
+{
+    protected $fillable = [
+        'telegram_bot_id',
+        'total_slots',
+        'slot_price',
+        'slots_mode',
+        'is_active',
+        'qr_image_path',
+        'payment_description',
+        'msg_welcome',
+        'msg_no_slots',
+        'msg_ask_fio',
+        'msg_ask_phone',
+        'msg_ask_inn',
+        'msg_confirm_data',
+        'msg_show_qr',
+        'msg_wait_check',
+        'msg_check_received',
+        'msg_check_approved',
+        'msg_check_rejected',
+        'msg_admin_request_sent',
+        'msg_admin_request_approved',
+        'msg_admin_request_rejected',
+    ];
+
+    protected $casts = [
+        'total_slots' => 'integer',
+        'slot_price' => 'decimal:2',
+        'is_active' => 'boolean',
+    ];
+
+    // ==========================================
+    // Дефолтные сообщения
+    // ==========================================
+
+    public const DEFAULTS = [
+        'msg_welcome' => "🎉 Добро пожаловать в розыгрыш!\n\n💰 Стоимость участия: {price} ₽ = 1 номерок\n📊 Свободных мест: {available_slots} из {total_slots}\n\nНажмите «Участвовать» чтобы начать!",
+        
+        'msg_no_slots' => "😔 К сожалению, все места уже заняты.\n\nМы уведомим вас, когда места появятся!",
+        
+        'msg_ask_fio' => "📝 Введите ваше ФИО (Фамилия Имя Отчество):",
+        
+        'msg_ask_phone' => "📱 Введите ваш номер телефона:\n\nПример: +7 999 123-45-67",
+        
+        'msg_ask_inn' => "🔢 Введите ваш ИНН (12 цифр для физ.лица):",
+        
+        'msg_confirm_data' => "✅ Проверьте введённые данные:\n\n👤 ФИО: {fio}\n📱 Телефон: {phone}\n🔢 ИНН: {inn}\n\nВсё верно?",
+        
+        'msg_show_qr' => "💳 Отсканируйте QR-код для оплаты\n\n💰 Стоимость: {price} ₽ = 1 номерок\n📝 Назначение: {payment_description}\n\nПосле оплаты отправьте чек (PDF или фото).",
+        
+        'msg_wait_check' => "⏳ Отправьте чек об оплате (PDF или фото):",
+        
+        'msg_check_received' => "📄 Чек получен и отправлен на проверку!\n\n⏳ Ожидайте подтверждения от администратора.",
+        
+        'msg_check_approved' => "✅ Платёж подтверждён!\n\n🎫 Ваши номерки: {tickets}\n\nУдачи в розыгрыше! 🍀",
+        
+        'msg_check_rejected' => "❌ Чек не принят.\n\n{reason}\n\nПроверьте оплату и отправьте чек повторно.",
+        
+        'msg_admin_request_sent' => "📤 Запрос на роль администратора отправлен!\n\n⏳ Ожидайте рассмотрения.",
+        
+        'msg_admin_request_approved' => "✅ Поздравляем! Вам выдана роль администратора.\n\nТеперь вы будете получать уведомления о новых чеках.",
+        
+        'msg_admin_request_rejected' => "❌ Запрос на роль администратора отклонён.\n\n{reason}",
+    ];
+
+    // ==========================================
+    // Связи
+    // ==========================================
+
+    public function telegramBot(): BelongsTo
+    {
+        return $this->belongsTo(TelegramBot::class);
+    }
+
+    // ==========================================
+    // Методы для получения сообщений
+    // ==========================================
+
+    /**
+     * Получить сообщение с подстановкой переменных
+     */
+    public function getMessage(string $key, array $variables = []): string
+    {
+        $message = $this->{'msg_' . $key} ?? self::DEFAULTS['msg_' . $key] ?? '';
+        
+        foreach ($variables as $var => $value) {
+            $message = str_replace('{' . $var . '}', $value, $message);
+        }
+        
+        return $message;
+    }
+
+    /**
+     * Получить приветственное сообщение
+     */
+    public function getWelcomeMessage(): string
+    {
+        return $this->getMessage('welcome', [
+            'price' => number_format($this->slot_price, 0, '', ' '),
+            'available_slots' => $this->getAvailableSlotsCount(),
+            'total_slots' => $this->total_slots,
+        ]);
+    }
+
+    /**
+     * Получить сообщение "нет мест"
+     */
+    public function getNoSlotsMessage(): string
+    {
+        return $this->getMessage('no_slots');
+    }
+
+    /**
+     * Получить сообщение с QR-кодом
+     */
+    public function getShowQrMessage(): string
+    {
+        return $this->getMessage('show_qr', [
+            'price' => number_format($this->slot_price, 0, '', ' '),
+            'payment_description' => $this->payment_description,
+        ]);
+    }
+
+    /**
+     * Получить сообщение об одобрении чека
+     */
+    public function getCheckApprovedMessage(array $tickets): string
+    {
+        return $this->getMessage('check_approved', [
+            'tickets' => implode(', ', $tickets),
+        ]);
+    }
+
+    // ==========================================
+    // Расчёты
+    // ==========================================
+
+    /**
+     * Получить количество свободных мест
+     */
+    public function getAvailableSlotsCount(): int
+    {
+        return Ticket::where('telegram_bot_id', $this->telegram_bot_id)
+            ->whereNull('bot_user_id')
+            ->count();
+    }
+
+    /**
+     * Получить количество занятых мест
+     */
+    public function getIssuedSlotsCount(): int
+    {
+        return Ticket::where('telegram_bot_id', $this->telegram_bot_id)
+            ->whereNotNull('bot_user_id')
+            ->count();
+    }
+
+    /**
+     * Рассчитать количество номерков по сумме
+     */
+    public function calculateTicketsCount(float $amount): int
+    {
+        if ($this->slot_price <= 0) {
+            return 0;
+        }
+        return (int) floor($amount / $this->slot_price);
+    }
+
+    /**
+     * Проверить, есть ли свободные места
+     */
+    public function hasAvailableSlots(): bool
+    {
+        return $this->getAvailableSlotsCount() > 0;
+    }
+
+    /**
+     * Проверить, хватает ли мест для выдачи
+     */
+    public function hasEnoughSlots(int $count): bool
+    {
+        return $this->getAvailableSlotsCount() >= $count;
+    }
+
+    /**
+     * Получить URL изображения QR-кода
+     */
+    public function getQrImageUrl(): ?string
+    {
+        if (!$this->qr_image_path) {
+            return null;
+        }
+        return url('storage/' . $this->qr_image_path);
+    }
+
+    /**
+     * Получить путь к файлу QR-кода
+     */
+    public function getQrImageFullPath(): ?string
+    {
+        if (!$this->qr_image_path) {
+            return null;
+        }
+        return storage_path('app/public/' . $this->qr_image_path);
+    }
+
+    // ==========================================
+    // Статические методы
+    // ==========================================
+
+    /**
+     * Получить или создать настройки для бота
+     */
+    public static function getOrCreate(int $telegramBotId): self
+    {
+        return self::firstOrCreate(
+            ['telegram_bot_id' => $telegramBotId],
+            [
+                'total_slots' => 500,
+                'slot_price' => 10000.00,
+                'slots_mode' => 'sequential',
+                'is_active' => true,
+                'qr_image_path' => 'bot-assets/default-qr.jpg',
+                'payment_description' => 'Оплата наклейки',
+            ]
+        );
+    }
+}
