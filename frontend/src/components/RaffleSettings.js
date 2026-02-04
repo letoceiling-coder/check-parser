@@ -385,7 +385,7 @@ function RaffleSettings({ bot }) {
           <h3 className="text-lg font-semibold text-gray-800">💬 Настройка сообщений бота</h3>
           <p className="text-sm text-gray-500">
             Оставьте поле пустым для использования сообщения по умолчанию.
-            Переменные: {'{price}'}, {'{available_slots}'}, {'{total_slots}'}, {'{fio}'}, {'{phone}'}, {'{inn}'}, {'{tickets}'}, {'{reason}'}
+            Переменные: {'{price}'}, {'{available_slots}'}, {'{total_slots}'}, {'{fio}'}, {'{phone}'}, {'{inn}'}, {'{tickets}'}, {'{reason}'}, {'{status_info}'}
           </p>
 
           <div className="space-y-4">
@@ -401,6 +401,7 @@ function RaffleSettings({ bot }) {
               { key: 'check_received', label: 'Чек получен', placeholder: 'Чек отправлен на проверку...' },
               { key: 'check_approved', label: 'Чек одобрен', placeholder: 'Платёж подтверждён! Ваши номерки: {tickets}' },
               { key: 'check_rejected', label: 'Чек отклонён', placeholder: 'Чек не принят. {reason}' },
+              { key: 'check_duplicate', label: '⚠️ Дубликат чека', placeholder: 'Этот чек уже был использован! {status_info}' },
             ].map(({ key, label, placeholder }) => (
               <div key={key}>
                 <label className="block text-sm font-medium text-gray-700 mb-1">

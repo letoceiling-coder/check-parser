@@ -26,6 +26,7 @@ class BotSettings extends Model
         'msg_check_received',
         'msg_check_approved',
         'msg_check_rejected',
+        'msg_check_duplicate',
         'msg_admin_request_sent',
         'msg_admin_request_approved',
         'msg_admin_request_rejected',
@@ -63,6 +64,8 @@ class BotSettings extends Model
         'msg_check_approved' => "✅ Платёж подтверждён!\n\n🎫 Ваши номерки: {tickets}\n\nУдачи в розыгрыше! 🍀",
         
         'msg_check_rejected' => "❌ Чек не принят.\n\n{reason}\n\nПроверьте оплату и отправьте чек повторно.",
+        
+        'msg_check_duplicate' => "⚠️ Этот чек уже был использован!\n\n{status_info}\n\nПожалуйста, отправьте другой чек для участия в розыгрыше.",
         
         'msg_admin_request_sent' => "📤 Запрос на роль администратора отправлен!\n\n⏳ Ожидайте рассмотрения.",
         

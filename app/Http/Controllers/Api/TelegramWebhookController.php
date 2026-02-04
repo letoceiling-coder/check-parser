@@ -494,23 +494,94 @@ class TelegramWebhookController extends Controller
                 return;
             }
             
+            // === ПРОВЕРКА ДУБЛИКАТОВ ===
+            
+            // 1. Вычисляем хеш файла
+            $fullFilePath = Storage::disk('local')->path($filePath);
+            $fileHash = Check::calculateFileHash($fullFilePath);
+            
+            Log::info('Checking for duplicate check', [
+                'file_hash' => $fileHash,
+                'bot_id' => $bot->id,
+            ]);
+            
             // Process with OCR
             $checkData = $this->processCheckWithOCR($filePath, $isPdf);
+            
+            // 2. Извлекаем ID операции из текста чека
+            $operationId = null;
+            if ($checkData && isset($checkData['raw_text'])) {
+                $operationId = Check::extractOperationId($checkData['raw_text']);
+                Log::info('Extracted operation ID', ['operation_id' => $operationId]);
+            }
+            
+            // 3. Генерируем уникальный ключ на основе суммы и даты
+            $uniqueKey = null;
+            if ($checkData) {
+                $uniqueKey = Check::generateUniqueKey(
+                    $checkData['amount'] ?? null,
+                    $checkData['date'] ?? null
+                );
+                Log::info('Generated unique key', ['unique_key' => $uniqueKey]);
+            }
+            
+            // 4. Проверяем на дубликат
+            $duplicateOriginal = Check::findDuplicate($bot->id, $fileHash, $operationId, $uniqueKey);
+            
+            if ($duplicateOriginal) {
+                Log::warning('Duplicate check detected', [
+                    'original_check_id' => $duplicateOriginal->id,
+                    'file_hash' => $fileHash,
+                    'operation_id' => $operationId,
+                    'unique_key' => $uniqueKey,
+                ]);
+                
+                // Удаляем загруженный файл
+                Storage::disk('local')->delete($filePath);
+                
+                // Уведомляем пользователя
+                $duplicateMessage = $this->getDuplicateCheckMessage($settings, $duplicateOriginal);
+                $this->sendMessage($bot, $chatId, $duplicateMessage);
+                
+                return;
+            }
+            
+            // === КОНЕЦ ПРОВЕРКИ ДУБЛИКАТОВ ===
+            
+            // Очистка текста от проблемных символов для MySQL
+            $rawText = null;
+            if (isset($checkData['raw_text'])) {
+                $rawText = $checkData['raw_text'];
+                $rawText = mb_convert_encoding($rawText, 'UTF-8', 'UTF-8');
+                $rawText = preg_replace('/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/u', '', $rawText);
+                $rawText = substr($rawText, 0, 5000);
+            }
+            
+            // Очистка first_name
+            $firstName = $userData['first_name'];
+            if ($firstName) {
+                $firstName = mb_convert_encoding($firstName, 'UTF-8', 'UTF-8');
+                $firstName = preg_replace('/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/u', '', $firstName);
+            }
             
             // Create check record
             $check = Check::create([
                 'telegram_bot_id' => $bot->id,
                 'chat_id' => $chatId,
                 'username' => $userData['username'],
-                'first_name' => $userData['first_name'],
+                'first_name' => $firstName,
                 'bot_user_id' => $botUser->id,
                 'file_path' => $filePath,
                 'file_type' => $checkRecord['file_type'],
                 'file_size' => $file['file_size'] ?? null,
+                'file_hash' => $fileHash,
+                'operation_id' => $operationId,
+                'unique_key' => $uniqueKey,
+                'is_duplicate' => false,
                 'amount' => $checkData['amount'] ?? null,
                 'check_date' => $checkData['date'] ?? null,
                 'ocr_method' => $checkData['ocr_method'] ?? null,
-                'raw_text' => isset($checkData['raw_text']) ? substr($checkData['raw_text'], 0, 5000) : null,
+                'raw_text' => $rawText,
                 'status' => $checkData ? 'success' : 'failed',
                 'amount_found' => isset($checkData['amount']),
                 'date_found' => isset($checkData['date']),
@@ -528,9 +599,30 @@ class TelegramWebhookController extends Controller
             $this->notifyAdminsAboutCheck($bot, $check, $checkData);
             
         } catch (\Exception $e) {
-            Log::error('Error processing raffle check: ' . $e->getMessage());
+            Log::error('Error processing raffle check: ' . $e->getMessage(), [
+                'trace' => $e->getTraceAsString(),
+            ]);
             $this->sendMessage($bot, $chatId, '❌ Произошла ошибка при обработке чека. Попробуйте ещё раз.');
         }
+    }
+    
+    /**
+     * Get message for duplicate check
+     */
+    private function getDuplicateCheckMessage(BotSettings $settings, Check $originalCheck): string
+    {
+        // Определяем информацию о статусе оригинального чека
+        $statusInfo = match ($originalCheck->review_status) {
+            'approved' => "Данный чек был одобрен ранее и по нему уже выданы номерки.",
+            'pending' => "Данный чек уже находится на проверке.\nДождитесь результата проверки или отправьте другой чек.",
+            'rejected' => "Данный чек был ранее отклонён.\nЕсли вы считаете это ошибкой, обратитесь к администратору.",
+            default => "Данный чек уже был отправлен ранее.",
+        };
+        
+        // Используем настраиваемое сообщение или дефолтное
+        return $settings->getMessage('check_duplicate', [
+            'status_info' => $statusInfo,
+        ]);
     }
     
     /**
@@ -854,6 +946,29 @@ class TelegramWebhookController extends Controller
                 $firstName = preg_replace('/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/u', '', $firstName);
             }
             
+            // Вычисляем данные для проверки дубликатов
+            $fileHash = null;
+            $operationId = null;
+            $uniqueKey = null;
+            
+            if ($filePath) {
+                $fullFilePath = Storage::disk('local')->path($filePath);
+                if (file_exists($fullFilePath)) {
+                    $fileHash = Check::calculateFileHash($fullFilePath);
+                }
+            }
+            
+            if ($rawText) {
+                $operationId = Check::extractOperationId($rawText);
+            }
+            
+            if ($checkData) {
+                $uniqueKey = Check::generateUniqueKey(
+                    $checkData['amount'] ?? null,
+                    $checkData['date'] ?? null
+                );
+            }
+            
             Check::create([
                 'telegram_bot_id' => $baseData['telegram_bot_id'],
                 'chat_id' => $baseData['chat_id'],
@@ -862,6 +977,10 @@ class TelegramWebhookController extends Controller
                 'file_path' => $filePath,
                 'file_type' => $baseData['file_type'] ?? 'image',
                 'file_size' => $fileSize,
+                'file_hash' => $fileHash,
+                'operation_id' => $operationId,
+                'unique_key' => $uniqueKey,
+                'is_duplicate' => false,
                 'amount' => $checkData['amount'] ?? null,
                 'currency' => $checkData['currency'] ?? 'RUB',
                 'check_date' => isset($checkData['date']) ? $checkData['date'] : null,
@@ -878,6 +997,9 @@ class TelegramWebhookController extends Controller
                 'status' => $finalStatus,
                 'amount_found' => $amountFound,
                 'date_found' => $dateFound,
+                'file_hash' => $fileHash ? substr($fileHash, 0, 16) . '...' : null,
+                'operation_id' => $operationId,
+                'unique_key' => $uniqueKey,
             ]);
         } catch (\Exception $e) {
             Log::error('Failed to save check to database: ' . $e->getMessage());

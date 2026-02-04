@@ -64,6 +64,7 @@ class RaffleSettingsController extends Controller
             'msg_check_received' => 'nullable|string|max:4000',
             'msg_check_approved' => 'nullable|string|max:4000',
             'msg_check_rejected' => 'nullable|string|max:4000',
+            'msg_check_duplicate' => 'nullable|string|max:4000',
             'msg_admin_request_sent' => 'nullable|string|max:4000',
             'msg_admin_request_approved' => 'nullable|string|max:4000',
             'msg_admin_request_rejected' => 'nullable|string|max:4000',
