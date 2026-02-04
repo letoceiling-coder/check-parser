@@ -7,7 +7,10 @@ function Sidebar({ isOpen, onToggle, user, onLogout }) {
   const menuItems = [
     { id: 'dashboard', label: 'Главная', icon: '🏠', path: '/' },
     { id: 'checks', label: 'Чеки', icon: '🧾', path: '/checks' },
-    { id: 'bot', label: 'Бот', icon: '🤖', path: '/bot' },
+    { id: 'tickets', label: 'Номерки', icon: '🎫', path: '/tickets' },
+    { id: 'admin-requests', label: 'Запросы на роли', icon: '👤', path: '/admin-requests' },
+    { id: 'bot-users', label: 'Пользователи', icon: '👥', path: '/bot-users' },
+    { id: 'bot', label: 'Настройки бота', icon: '🤖', path: '/bot' },
   ];
 
   return (
