@@ -22,9 +22,14 @@ class TelegramWebhookController extends Controller
      */
     public function handle(Request $request): JsonResponse
     {
+        $update = $request->all();
+        Log::info('Telegram webhook received', [
+            'update_id' => $update['update_id'] ?? null,
+            'has_message' => isset($update['message']),
+            'message_text' => $update['message']['text'] ?? null,
+        ]);
+
         try {
-            $update = $request->all();
-            Log::info('Telegram webhook received', ['update' => $update]);
 
             // Find bot by token (we need to identify which bot this update is for)
             // Telegram sends updates to webhook URL, we need to identify bot
@@ -3458,25 +3463,6 @@ PYTHON;
         return $keyboard 
             ? $this->sendMessageWithKeyboard($bot, $chatId, $text, $keyboard)
             : $this->sendMessage($bot, $chatId, $text);
-    }
-
-    /**
-     * Delete message
-     */
-    private function deleteMessage(TelegramBot $bot, int $chatId, int $messageId): bool
-    {
-        try {
-            $response = Http::timeout(10)
-                ->post("https://api.telegram.org/bot{$bot->token}/deleteMessage", [
-                    'chat_id' => $chatId,
-                    'message_id' => $messageId,
-                ]);
-
-            return $response->successful();
-        } catch (\Exception $e) {
-            Log::warning('Error deleting message: ' . $e->getMessage());
-            return false;
-        }
     }
 
     /**

@@ -34,9 +34,10 @@ class TelegramMenuService
     }
 
     /**
-     * Получить постоянную Reply Keyboard
+     * Получить постоянную Reply Keyboard (статический метод для использования без экземпляра)
+     * Клавиатура отображается ВСЕГДА (is_persistent: true).
      */
-    public function getReplyKeyboard(): array
+    public static function getReplyKeyboardArray(): array
     {
         return [
             'keyboard' => [
@@ -52,6 +53,14 @@ class TelegramMenuService
             'resize_keyboard' => true,
             'is_persistent' => true,
         ];
+    }
+
+    /**
+     * Получить постоянную Reply Keyboard (экземплярный метод)
+     */
+    public function getReplyKeyboard(): array
+    {
+        return self::getReplyKeyboardArray();
     }
 
     /**

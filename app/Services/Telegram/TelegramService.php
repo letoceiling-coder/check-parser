@@ -50,6 +50,15 @@ class TelegramService
     }
 
     /**
+     * Отправить сообщение с постоянной Reply Keyboard (меню отображается всегда).
+     */
+    public function sendMessageWithReplyKeyboard(int $chatId, string $text, string $parseMode = 'HTML'): ?array
+    {
+        $replyMarkup = TelegramMenuService::getReplyKeyboardArray();
+        return $this->sendMessage($chatId, $text, $replyMarkup, $parseMode);
+    }
+
+    /**
      * Редактировать сообщение (для FSM - один экран = одно сообщение)
      */
     public function editMessage(

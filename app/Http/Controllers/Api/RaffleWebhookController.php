@@ -11,6 +11,7 @@ use App\Models\AdminRequest;
 use App\Models\Ticket;
 use App\Models\AdminActionLog;
 use App\Services\Telegram\FSM\BotFSM;
+use App\Services\Telegram\TelegramMenuService;
 use App\Services\Telegram\TelegramService;
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
@@ -135,6 +136,30 @@ class RaffleWebhookController extends Controller
             }
         }
 
+        // Обработка нажатий кнопок постоянного меню (Reply Keyboard)
+        if ($text) {
+            if ($text === TelegramMenuService::BTN_HOME) {
+                $this->handleStartCommand();
+                return;
+            }
+            if ($text === TelegramMenuService::BTN_ABOUT) {
+                $this->handleAboutRaffle();
+                return;
+            }
+            if ($text === TelegramMenuService::BTN_MY_TICKETS) {
+                $this->handleMyTickets();
+                return;
+            }
+            if ($text === TelegramMenuService::BTN_SUPPORT) {
+                $this->handleSupport();
+                return;
+            }
+            if ($text === '🎯 Участвовать' && $this->fsm->getState() === BotFSM::STATE_WELCOME) {
+                $this->onParticipate();
+                return;
+            }
+        }
+
         // Обработка по текущему состоянию FSM
         $state = $this->fsm->getState();
 
@@ -177,9 +202,9 @@ class RaffleWebhookController extends Controller
                 break;
 
             default:
-                // Для неизвестных состояний отправляем в начало
+                // Для неизвестных состояний отправляем в начало (с меню)
                 if ($text && !str_starts_with($text, '/')) {
-                    $this->telegram->sendMessage(
+                    $this->telegram->sendMessageWithReplyKeyboard(
                         $chatId,
                         "Используйте /start для начала работы с ботом."
                     );
@@ -193,7 +218,7 @@ class RaffleWebhookController extends Controller
     // ==========================================
 
     /**
-     * /start - начало работы
+     * /start - начало работы. Отправляем приветствие с постоянной Reply Keyboard (меню всегда видно).
      */
     private function handleStartCommand(): void
     {
@@ -202,22 +227,29 @@ class RaffleWebhookController extends Controller
         // Сбрасываем состояние
         $this->fsm->reset();
 
+        // Постоянная Reply Keyboard — отправляем первым сообщением, чтобы она отображалась ВСЕГДА
+        $replyKeyboard = TelegramMenuService::getReplyKeyboardArray();
+
         // Проверяем наличие мест
         if (!$this->settings->hasAvailableSlots()) {
-            // Мест нет
             $this->fsm->setState(BotFSM::STATE_WELCOME);
             $message = $this->settings->getNoSlotsMessage();
-            $keyboard = $this->fsm->getNoSlotsKeyboard();
+            $result = $this->telegram->sendMessage($chatId, $message, $replyKeyboard);
+            if ($result && isset($result['result']['message_id'])) {
+                $this->fsm->setLastMessageId($result['result']['message_id']);
+            }
+            // Второе сообщение с inline-кнопками (уведомить о местах и т.д.)
+            $this->telegram->sendMessage($chatId, '👇', $this->fsm->getNoSlotsKeyboard());
         } else {
-            // Места есть
             $this->fsm->setState(BotFSM::STATE_WELCOME);
             $message = $this->settings->getWelcomeMessage();
-            $keyboard = $this->fsm->getWelcomeKeyboard();
-        }
-
-        $result = $this->telegram->sendMessage($chatId, $message, $keyboard);
-        if ($result && isset($result['result']['message_id'])) {
-            $this->fsm->setLastMessageId($result['result']['message_id']);
+            // Первое сообщение: текст приветствия + постоянная клавиатура (Главная, О розыгрыше, Мои номерки, Поддержка)
+            $result = $this->telegram->sendMessage($chatId, $message, $replyKeyboard);
+            if ($result && isset($result['result']['message_id'])) {
+                $this->fsm->setLastMessageId($result['result']['message_id']);
+            }
+            // Второе сообщение: inline-кнопка "Участвовать"
+            $this->telegram->sendMessage($chatId, '👇 Нажмите кнопку ниже, чтобы участвовать', $this->fsm->getWelcomeKeyboard());
         }
     }
 
@@ -230,13 +262,13 @@ class RaffleWebhookController extends Controller
 
         // Если уже админ
         if ($this->botUser->isAdmin()) {
-            $this->telegram->sendMessage($chatId, "✅ Вы уже являетесь администратором.");
+            $this->telegram->sendMessageWithReplyKeyboard($chatId, "✅ Вы уже являетесь администратором.");
             return;
         }
 
         // Проверяем, есть ли уже активный запрос
         if (AdminRequest::hasPendingRequest($this->botUser->id)) {
-            $this->telegram->sendMessage(
+            $this->telegram->sendMessageWithReplyKeyboard(
                 $chatId,
                 "⏳ Ваш запрос на роль администратора уже на рассмотрении."
             );
@@ -247,10 +279,37 @@ class RaffleWebhookController extends Controller
         AdminRequest::createRequest($this->botUser);
 
         $message = $this->settings->getMessage('admin_request_sent');
-        $this->telegram->sendMessage($chatId, $message);
+        $this->telegram->sendMessageWithReplyKeyboard($chatId, $message);
 
         // Уведомляем существующих админов
         $this->notifyAdminsAboutRequest();
+    }
+
+    /**
+     * Обработка кнопки "О розыгрыше" (постоянное меню)
+     */
+    private function handleAboutRaffle(): void
+    {
+        $menu = new TelegramMenuService($this->bot);
+        $menu->handleAboutRaffle($this->botUser->telegram_user_id, $this->botUser);
+    }
+
+    /**
+     * Обработка кнопки "Мои номерки" (постоянное меню)
+     */
+    private function handleMyTickets(): void
+    {
+        $menu = new TelegramMenuService($this->bot);
+        $menu->handleMyTickets($this->botUser->telegram_user_id, $this->botUser);
+    }
+
+    /**
+     * Обработка кнопки "Поддержка" (постоянное меню)
+     */
+    private function handleSupport(): void
+    {
+        $menu = new TelegramMenuService($this->bot);
+        $menu->handleSupport($this->botUser->telegram_user_id);
     }
 
     /**
@@ -269,7 +328,7 @@ class RaffleWebhookController extends Controller
                 . "📝 Всего номерков: " . count($tickets);
         }
 
-        $this->telegram->sendMessage($chatId, $message);
+        $this->telegram->sendMessageWithReplyKeyboard($chatId, $message);
     }
 
     /**
@@ -286,7 +345,7 @@ class RaffleWebhookController extends Controller
             . "💰 Стоимость участия: " . number_format($this->settings->slot_price, 0, '', ' ') . " ₽ = 1 номерок\n"
             . "📊 Свободных мест: " . $this->settings->getAvailableSlotsCount() . " из " . $this->settings->total_slots;
 
-        $this->telegram->sendMessage($chatId, $message);
+        $this->telegram->sendMessageWithReplyKeyboard($chatId, $message);
     }
 
     // ==========================================
@@ -428,7 +487,7 @@ class RaffleWebhookController extends Controller
         // Скачиваем файл
         $fileInfo = $this->telegram->getFile($fileId);
         if (!$fileInfo || !isset($fileInfo['result']['file_path'])) {
-            $this->telegram->sendMessage($chatId, "❌ Не удалось загрузить файл. Попробуйте снова.");
+            $this->telegram->sendMessageWithReplyKeyboard($chatId, "❌ Не удалось загрузить файл. Попробуйте снова.");
             return;
         }
 
@@ -436,7 +495,7 @@ class RaffleWebhookController extends Controller
         $localPath = 'checks/' . $this->botUser->id . '_' . time() . '_' . $fileName;
 
         if (!$this->telegram->downloadFile($filePath, $localPath)) {
-            $this->telegram->sendMessage($chatId, "❌ Ошибка загрузки файла. Попробуйте снова.");
+            $this->telegram->sendMessageWithReplyKeyboard($chatId, "❌ Ошибка загрузки файла. Попробуйте снова.");
             return;
         }
 
@@ -460,7 +519,7 @@ class RaffleWebhookController extends Controller
         // Скачиваем файл
         $fileInfo = $this->telegram->getFile($fileId);
         if (!$fileInfo || !isset($fileInfo['result']['file_path'])) {
-            $this->telegram->sendMessage($chatId, "❌ Не удалось загрузить фото. Попробуйте снова.");
+            $this->telegram->sendMessageWithReplyKeyboard($chatId, "❌ Не удалось загрузить фото. Попробуйте снова.");
             return;
         }
 
@@ -468,7 +527,7 @@ class RaffleWebhookController extends Controller
         $localPath = 'checks/' . $this->botUser->id . '_' . time() . '.jpg';
 
         if (!$this->telegram->downloadFile($filePath, $localPath)) {
-            $this->telegram->sendMessage($chatId, "❌ Ошибка загрузки фото. Попробуйте снова.");
+            $this->telegram->sendMessageWithReplyKeyboard($chatId, "❌ Ошибка загрузки фото. Попробуйте снова.");
             return;
         }
 
@@ -511,7 +570,7 @@ class RaffleWebhookController extends Controller
 
         // Отправляем подтверждение пользователю
         $message = $this->settings->getMessage('check_received');
-        $this->telegram->sendMessage($chatId, $message);
+        $this->telegram->sendMessageWithReplyKeyboard($chatId, $message);
 
         // Уведомляем администраторов
         $this->notifyAdminsAboutCheck($check);
@@ -697,7 +756,7 @@ class RaffleWebhookController extends Controller
         $this->botUser->notify_on_slots_available = true;
         $this->botUser->save();
 
-        $this->telegram->sendMessage(
+        $this->telegram->sendMessageWithReplyKeyboard(
             $this->botUser->telegram_user_id,
             "🔔 Вы будете уведомлены, когда появятся свободные места!"
         );
@@ -837,7 +896,7 @@ class RaffleWebhookController extends Controller
         $ticketNumbers = $tickets->pluck('number')->sort()->values()->toArray();
         $userMessage = $this->settings->getCheckApprovedMessage($ticketNumbers);
         
-        $this->telegram->sendMessage($checkUser->telegram_user_id, $userMessage);
+        $this->telegram->sendMessageWithReplyKeyboard($checkUser->telegram_user_id, $userMessage);
 
         // Подтверждаем админу
         $this->telegram->sendMessage(
@@ -876,7 +935,7 @@ class RaffleWebhookController extends Controller
             $userMessage = $this->settings->getMessage('check_rejected', [
                 'reason' => 'Проверьте правильность оплаты.',
             ]);
-            $this->telegram->sendMessage($checkUser->telegram_user_id, $userMessage);
+            $this->telegram->sendMessageWithReplyKeyboard($checkUser->telegram_user_id, $userMessage);
         }
 
         // Подтверждаем админу
