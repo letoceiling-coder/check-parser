@@ -12,14 +12,15 @@ use Illuminate\Support\Facades\Log;
 class BotController extends Controller
 {
     /**
-     * Get bot for authenticated user
+     * Get bots for authenticated user (returns array)
      */
     public function index(Request $request): JsonResponse
     {
         $bot = TelegramBot::where('user_id', $request->user()->id)->first();
 
         if (!$bot) {
-            return response()->json(['message' => 'Bot not found'], 404);
+            // Возвращаем пустой массив вместо 404 для совместимости с фронтендом
+            return response()->json([]);
         }
 
         // Добавляем дефолтное сообщение если не установлено
@@ -28,7 +29,8 @@ class BotController extends Controller
         $botData['welcome_message_display'] = $bot->getWelcomeMessageText();
         $botData['default_welcome_message'] = TelegramBot::DEFAULT_WELCOME_MESSAGE;
 
-        return response()->json($botData);
+        // Возвращаем массив с одним ботом для совместимости с фронтендом
+        return response()->json([$botData]);
     }
 
     /**
