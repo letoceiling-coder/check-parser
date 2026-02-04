@@ -5,6 +5,8 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\Check;
 use App\Models\TelegramBot;
+use App\Models\BotUser;
+use App\Models\BotSettings;
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\Http;
@@ -103,6 +105,7 @@ class TelegramWebhookController extends Controller
     private function handleMessage(TelegramBot $bot, array $message): void
     {
         $chatId = $message['chat']['id'];
+        $telegramUserId = $message['from']['id'] ?? $chatId;
         $text = $message['text'] ?? null;
         $photo = $message['photo'] ?? null;
         $document = $message['document'] ?? null;
@@ -112,8 +115,41 @@ class TelegramWebhookController extends Controller
         $userData = [
             'username' => $from['username'] ?? null,
             'first_name' => $from['first_name'] ?? null,
+            'last_name' => $from['last_name'] ?? null,
         ];
 
+        // Check if raffle mode is enabled for this bot
+        $botSettings = BotSettings::where('telegram_bot_id', $bot->id)->first();
+        $isRaffleMode = $botSettings && $botSettings->is_active;
+
+        if ($isRaffleMode) {
+            // Get or create BotUser for FSM
+            $botUser = $this->getOrCreateBotUser($bot, $telegramUserId, $userData);
+            
+            // Handle /start command in raffle mode
+            if ($text && str_starts_with($text, '/start')) {
+                $this->handleRaffleStart($bot, $botUser, $chatId, $botSettings);
+                return;
+            }
+            
+            // Handle /admin command
+            if ($text && str_starts_with($text, '/admin')) {
+                $this->handleAdminRequest($bot, $botUser, $chatId);
+                return;
+            }
+            
+            // Handle /status command
+            if ($text && str_starts_with($text, '/status')) {
+                $this->handleStatusCommand($bot, $botUser, $chatId);
+                return;
+            }
+            
+            // Handle FSM states
+            $this->handleRaffleFSM($bot, $botUser, $chatId, $message, $botSettings);
+            return;
+        }
+
+        // Original check processing mode
         // Handle /start command
         if ($text && str_starts_with($text, '/start')) {
             $this->handleStartCommand($bot, $chatId);
@@ -136,6 +172,433 @@ class TelegramWebhookController extends Controller
         if ($text) {
             $this->sendMessage($bot, $chatId, 'Пожалуйста, отправьте фото чека для обработки.');
         }
+    }
+    
+    /**
+     * Get or create BotUser
+     */
+    private function getOrCreateBotUser(TelegramBot $bot, int $telegramUserId, array $userData): BotUser
+    {
+        return BotUser::firstOrCreate(
+            ['telegram_bot_id' => $bot->id, 'telegram_user_id' => $telegramUserId],
+            [
+                'username' => $userData['username'] ?? null,
+                'first_name' => $userData['first_name'] ?? null,
+                'last_name' => $userData['last_name'] ?? null,
+                'role' => BotUser::ROLE_USER,
+                'fsm_state' => BotUser::STATE_IDLE,
+            ]
+        );
+    }
+    
+    /**
+     * Handle raffle /start command
+     */
+    private function handleRaffleStart(TelegramBot $bot, BotUser $botUser, int $chatId, BotSettings $settings): void
+    {
+        Log::info('Handling raffle /start', ['bot_id' => $bot->id, 'user_id' => $botUser->id]);
+        
+        // Check available slots
+        $availableSlots = $settings->getAvailableSlotsCount();
+        
+        if ($availableSlots <= 0 || !$settings->is_active) {
+            // No slots available
+            $message = $settings->msg_no_slots ?? "К сожалению, все места уже заняты.\n\nСледите за новостями!";
+            $message = str_replace('{total_slots}', $settings->total_slots, $message);
+            
+            $keyboard = [
+                'inline_keyboard' => [
+                    [['text' => '🏠 В начало', 'callback_data' => 'home']]
+                ]
+            ];
+            
+            $this->sendMessageWithKeyboard($bot, $chatId, $message, $keyboard);
+            $botUser->update(['fsm_state' => BotUser::STATE_IDLE]);
+            return;
+        }
+        
+        // Show welcome with price
+        $message = $settings->msg_welcome ?? "Добро пожаловать в розыгрыш! 🎉\n\nСтоимость участия: {price} ₽ = 1 номерок\nДоступно мест: {available_slots} из {total_slots}\n\nНажмите \"Участвовать\" чтобы начать!";
+        $message = str_replace('{price}', number_format($settings->slot_price, 0, ',', ' '), $message);
+        $message = str_replace('{available_slots}', $availableSlots, $message);
+        $message = str_replace('{total_slots}', $settings->total_slots, $message);
+        
+        $keyboard = [
+            'inline_keyboard' => [
+                [['text' => '🎉 Участвовать', 'callback_data' => 'participate']],
+                [['text' => '❌ Отмена', 'callback_data' => 'cancel']]
+            ]
+        ];
+        
+        $result = $this->sendMessageWithKeyboard($bot, $chatId, $message, $keyboard);
+        
+        // Save message ID for editing
+        if ($result && isset($result['message_id'])) {
+            $botUser->update([
+                'fsm_state' => BotUser::STATE_WELCOME,
+                'last_bot_message_id' => $result['message_id']
+            ]);
+        }
+    }
+    
+    /**
+     * Handle admin request command
+     */
+    private function handleAdminRequest(TelegramBot $bot, BotUser $botUser, int $chatId): void
+    {
+        if ($botUser->isAdmin()) {
+            $this->sendMessage($bot, $chatId, "Вы уже являетесь администратором.");
+            return;
+        }
+        
+        // Check existing pending request
+        $existingRequest = \App\Models\AdminRequest::where('bot_user_id', $botUser->id)
+            ->where('status', \App\Models\AdminRequest::STATUS_PENDING)
+            ->first();
+            
+        if ($existingRequest) {
+            $this->sendMessage($bot, $chatId, "Ваш запрос на роль администратора уже находится на рассмотрении.");
+            return;
+        }
+        
+        // Create request
+        \App\Models\AdminRequest::create([
+            'telegram_bot_id' => $bot->id,
+            'bot_user_id' => $botUser->id,
+            'status' => \App\Models\AdminRequest::STATUS_PENDING,
+        ]);
+        
+        $settings = BotSettings::where('telegram_bot_id', $bot->id)->first();
+        $message = $settings->msg_admin_request_sent ?? "Ваш запрос на роль администратора отправлен и ожидает рассмотрения.";
+        $this->sendMessage($bot, $chatId, $message);
+    }
+    
+    /**
+     * Handle /status command - show user's tickets
+     */
+    private function handleStatusCommand(TelegramBot $bot, BotUser $botUser, int $chatId): void
+    {
+        $tickets = \App\Models\Ticket::where('bot_user_id', $botUser->id)->pluck('number')->toArray();
+        
+        if (empty($tickets)) {
+            $this->sendMessage($bot, $chatId, "У вас пока нет номерков.\n\nОтправьте /start чтобы участвовать в розыгрыше!");
+        } else {
+            $ticketsList = implode(', ', $tickets);
+            $this->sendMessage($bot, $chatId, "🎟 Ваши номерки: {$ticketsList}\n\nВсего: " . count($tickets) . " шт.");
+        }
+    }
+    
+    /**
+     * Handle FSM for raffle
+     */
+    private function handleRaffleFSM(TelegramBot $bot, BotUser $botUser, int $chatId, array $message, BotSettings $settings): void
+    {
+        $text = $message['text'] ?? null;
+        $photo = $message['photo'] ?? null;
+        $document = $message['document'] ?? null;
+        
+        $state = $botUser->fsm_state;
+        
+        Log::info('Processing FSM state', ['state' => $state, 'user_id' => $botUser->id, 'has_text' => !empty($text)]);
+        
+        switch ($state) {
+            case BotUser::STATE_WAIT_FIO:
+                if ($text) {
+                    $botUser->fio_encrypted = encrypt($text);
+                    $botUser->fsm_state = BotUser::STATE_WAIT_PHONE;
+                    $botUser->save();
+                    
+                    $msg = $settings->msg_ask_phone ?? "📱 Введите номер телефона в формате +7XXXXXXXXXX:";
+                    $keyboard = $this->getBackCancelKeyboard();
+                    $this->editOrSendMessage($bot, $chatId, $botUser->last_bot_message_id, $msg, $keyboard);
+                }
+                break;
+                
+            case BotUser::STATE_WAIT_PHONE:
+                if ($text) {
+                    // Basic phone validation
+                    $phone = preg_replace('/[^0-9+]/', '', $text);
+                    if (strlen($phone) >= 10) {
+                        $botUser->phone_encrypted = encrypt($phone);
+                        $botUser->fsm_state = BotUser::STATE_WAIT_INN;
+                        $botUser->save();
+                        
+                        $msg = $settings->msg_ask_inn ?? "🔢 Введите ваш ИНН (10 или 12 цифр):";
+                        $keyboard = $this->getBackCancelKeyboard();
+                        $this->editOrSendMessage($bot, $chatId, $botUser->last_bot_message_id, $msg, $keyboard);
+                    } else {
+                        $this->sendMessage($bot, $chatId, "❌ Неверный формат телефона. Введите номер в формате +7XXXXXXXXXX:");
+                    }
+                }
+                break;
+                
+            case BotUser::STATE_WAIT_INN:
+                if ($text) {
+                    $inn = preg_replace('/[^0-9]/', '', $text);
+                    if (strlen($inn) == 10 || strlen($inn) == 12) {
+                        $botUser->inn_encrypted = encrypt($inn);
+                        $botUser->fsm_state = BotUser::STATE_CONFIRM_DATA;
+                        $botUser->save();
+                        
+                        $this->showConfirmData($bot, $botUser, $chatId, $settings);
+                    } else {
+                        $this->sendMessage($bot, $chatId, "❌ ИНН должен содержать 10 или 12 цифр. Попробуйте ещё раз:");
+                    }
+                }
+                break;
+                
+            case BotUser::STATE_SHOW_QR:
+            case BotUser::STATE_WAIT_CHECK:
+                // Handle check submission
+                if ($photo || ($document && ($this->isImageDocument($document) || $this->isPdfDocument($document)))) {
+                    $this->handleRaffleCheck($bot, $botUser, $chatId, $message, $settings);
+                } else if ($text) {
+                    $this->sendMessage($bot, $chatId, "📤 Отправьте фото чека или PDF-файл для подтверждения оплаты.");
+                }
+                break;
+                
+            case BotUser::STATE_PENDING_REVIEW:
+                $msg = $settings->msg_check_received ?? "⏳ Ваш чек уже на проверке. Ожидайте результата.";
+                $this->sendMessage($bot, $chatId, $msg);
+                break;
+                
+            case BotUser::STATE_REJECTED:
+                $msg = "Ваш предыдущий чек был отклонён. Отправьте новый чек или нажмите /start для начала.";
+                $this->sendMessage($bot, $chatId, $msg);
+                break;
+                
+            default:
+                $this->sendMessage($bot, $chatId, "Отправьте /start чтобы начать участие в розыгрыше.");
+                break;
+        }
+    }
+    
+    /**
+     * Show confirm data screen
+     */
+    private function showConfirmData(TelegramBot $bot, BotUser $botUser, int $chatId, BotSettings $settings): void
+    {
+        $fio = $botUser->fio_encrypted ? decrypt($botUser->fio_encrypted) : 'Не указано';
+        $phone = $botUser->phone_encrypted ? decrypt($botUser->phone_encrypted) : 'Не указан';
+        $inn = $botUser->inn_encrypted ? decrypt($botUser->inn_encrypted) : 'Не указан';
+        
+        $msg = $settings->msg_confirm_data ?? "Проверьте введённые данные:\n\nФИО: {fio}\nТелефон: {phone}\nИНН: {inn}\n\nВсё верно?";
+        $msg = str_replace('{fio}', $fio, $msg);
+        $msg = str_replace('{phone}', $phone, $msg);
+        $msg = str_replace('{inn}', $inn, $msg);
+        
+        $keyboard = [
+            'inline_keyboard' => [
+                [['text' => '✅ Подтвердить', 'callback_data' => 'confirm_data']],
+                [['text' => '🔄 Заполнить заново', 'callback_data' => 'retry_data']],
+                [['text' => '❌ Отмена', 'callback_data' => 'cancel']]
+            ]
+        ];
+        
+        $this->editOrSendMessage($bot, $chatId, $botUser->last_bot_message_id, $msg, $keyboard);
+    }
+    
+    /**
+     * Show QR code for payment
+     */
+    private function showQrCode(TelegramBot $bot, BotUser $botUser, int $chatId, BotSettings $settings): void
+    {
+        $qrPath = $settings->qr_image_path;
+        
+        if (!$qrPath || !Storage::disk('public')->exists($qrPath)) {
+            Log::error('QR image not found', ['path' => $qrPath]);
+            $this->sendMessage($bot, $chatId, "❌ QR-код временно недоступен. Обратитесь к администратору.");
+            return;
+        }
+        
+        $msg = $settings->msg_show_qr ?? "Оплатите {price} руб по QR-коду.\n\nНазначение платежа: {payment_description}\n\nПосле оплаты отправьте фото или PDF чека.";
+        $msg = str_replace('{price}', number_format($settings->slot_price, 0, ',', ' '), $msg);
+        $msg = str_replace('{payment_description}', $settings->payment_description ?? 'Оплата наклейки', $msg);
+        
+        // Delete old message and send photo
+        if ($botUser->last_bot_message_id) {
+            $this->deleteMessage($bot, $chatId, $botUser->last_bot_message_id);
+        }
+        
+        $keyboard = [
+            'inline_keyboard' => [
+                [['text' => '◀️ Назад', 'callback_data' => 'back_to_confirm']],
+                [['text' => '❌ Отмена', 'callback_data' => 'cancel']]
+            ]
+        ];
+        
+        $fullPath = Storage::disk('public')->path($qrPath);
+        $result = $this->sendPhoto($bot, $chatId, $fullPath, $msg, $keyboard);
+        
+        if ($result && isset($result['message_id'])) {
+            $botUser->update([
+                'fsm_state' => BotUser::STATE_WAIT_CHECK,
+                'last_bot_message_id' => $result['message_id']
+            ]);
+        }
+    }
+    
+    /**
+     * Handle check submission in raffle mode
+     */
+    private function handleRaffleCheck(TelegramBot $bot, BotUser $botUser, int $chatId, array $message, BotSettings $settings): void
+    {
+        $photo = $message['photo'] ?? null;
+        $document = $message['document'] ?? null;
+        
+        $this->sendMessage($bot, $chatId, '⏳ Обрабатываю чек...');
+        
+        $userData = [
+            'username' => $botUser->username,
+            'first_name' => $botUser->first_name,
+        ];
+        
+        $checkRecord = [
+            'telegram_bot_id' => $bot->id,
+            'chat_id' => $chatId,
+            'username' => $userData['username'],
+            'first_name' => $userData['first_name'],
+            'bot_user_id' => $botUser->id,
+            'review_status' => 'pending',
+        ];
+        
+        try {
+            $fileId = null;
+            $isPdf = false;
+            
+            if ($photo) {
+                $photoSizes = array_reverse($photo);
+                $fileId = $photoSizes[0]['file_id'];
+                $checkRecord['file_type'] = 'image';
+            } elseif ($document) {
+                $fileId = $document['file_id'];
+                $isPdf = $this->isPdfDocument($document);
+                $checkRecord['file_type'] = $isPdf ? 'pdf' : 'image';
+            }
+            
+            if (!$fileId) {
+                $this->sendMessage($bot, $chatId, '❌ Не удалось получить файл.');
+                return;
+            }
+            
+            // Get and download file
+            $file = $this->getFile($bot, $fileId);
+            if (!$file) {
+                $this->sendMessage($bot, $chatId, '❌ Ошибка при получении файла.');
+                return;
+            }
+            
+            $filePath = $this->downloadFile($bot, $file['file_path']);
+            if (!$filePath) {
+                $this->sendMessage($bot, $chatId, '❌ Ошибка при загрузке файла.');
+                return;
+            }
+            
+            // Process with OCR
+            $checkData = $this->processCheckWithOCR($filePath, $isPdf);
+            
+            // Create check record
+            $check = Check::create([
+                'telegram_bot_id' => $bot->id,
+                'chat_id' => $chatId,
+                'username' => $userData['username'],
+                'first_name' => $userData['first_name'],
+                'bot_user_id' => $botUser->id,
+                'file_path' => $filePath,
+                'file_type' => $checkRecord['file_type'],
+                'file_size' => $file['file_size'] ?? null,
+                'amount' => $checkData['amount'] ?? null,
+                'check_date' => $checkData['date'] ?? null,
+                'ocr_method' => $checkData['ocr_method'] ?? null,
+                'raw_text' => isset($checkData['raw_text']) ? substr($checkData['raw_text'], 0, 5000) : null,
+                'status' => $checkData ? 'success' : 'failed',
+                'amount_found' => isset($checkData['amount']),
+                'date_found' => isset($checkData['date']),
+                'review_status' => 'pending',
+            ]);
+            
+            // Update user state
+            $botUser->update(['fsm_state' => BotUser::STATE_PENDING_REVIEW]);
+            
+            // Send confirmation to user
+            $msg = $settings->msg_check_received ?? "✅ Ваш чек принят и отправлен на проверку.\n\nМы уведомим вас о результате!";
+            $this->sendMessage($bot, $chatId, $msg);
+            
+            // Notify admins
+            $this->notifyAdminsAboutCheck($bot, $check, $checkData);
+            
+        } catch (\Exception $e) {
+            Log::error('Error processing raffle check: ' . $e->getMessage());
+            $this->sendMessage($bot, $chatId, '❌ Произошла ошибка при обработке чека. Попробуйте ещё раз.');
+        }
+    }
+    
+    /**
+     * Notify bot admins about new check
+     */
+    private function notifyAdminsAboutCheck(TelegramBot $bot, Check $check, ?array $checkData): void
+    {
+        // Get all admin users for this bot
+        $admins = BotUser::where('telegram_bot_id', $bot->id)
+            ->where('role', BotUser::ROLE_ADMIN)
+            ->get();
+        
+        if ($admins->isEmpty()) {
+            Log::warning('No admins to notify about check', ['check_id' => $check->id]);
+            return;
+        }
+        
+        $amount = $checkData['amount'] ?? 'Не определена';
+        $date = $checkData['date'] ?? 'Не определена';
+        $username = $check->username ? '@' . $check->username : 'Без username';
+        
+        $message = "🆕 Новый чек на проверку!\n\n" .
+            "👤 Пользователь: {$username}\n" .
+            "💰 Сумма: " . (is_numeric($amount) ? number_format($amount, 2, ',', ' ') . ' ₽' : $amount) . "\n" .
+            "📅 Дата: {$date}\n" .
+            "🆔 Check ID: {$check->id}\n\n" .
+            "Откройте админ-панель для проверки.";
+        
+        $keyboard = [
+            'inline_keyboard' => [
+                [
+                    ['text' => '✅ Одобрить', 'callback_data' => 'admin_approve_' . $check->id],
+                    ['text' => '❌ Отклонить', 'callback_data' => 'admin_reject_' . $check->id]
+                ],
+                [['text' => '✏️ Редактировать', 'callback_data' => 'admin_edit_' . $check->id]]
+            ]
+        ];
+        
+        foreach ($admins as $admin) {
+            try {
+                // Send check file
+                if ($check->file_path && Storage::disk('local')->exists($check->file_path)) {
+                    $fullPath = Storage::disk('local')->path($check->file_path);
+                    if ($check->file_type === 'pdf') {
+                        $this->sendDocument($bot, $admin->telegram_user_id, $fullPath, $message, $keyboard);
+                    } else {
+                        $this->sendPhoto($bot, $admin->telegram_user_id, $fullPath, $message, $keyboard);
+                    }
+                } else {
+                    $this->sendMessageWithKeyboard($bot, $admin->telegram_user_id, $message, $keyboard);
+                }
+            } catch (\Exception $e) {
+                Log::error('Failed to notify admin', ['admin_id' => $admin->id, 'error' => $e->getMessage()]);
+            }
+        }
+    }
+    
+    /**
+     * Get back/cancel keyboard
+     */
+    private function getBackCancelKeyboard(): array
+    {
+        return [
+            'inline_keyboard' => [
+                [['text' => '◀️ Назад', 'callback_data' => 'back']],
+                [['text' => '❌ Отмена', 'callback_data' => 'cancel']]
+            ]
+        ];
     }
 
     /**
@@ -2371,6 +2834,8 @@ PYTHON;
     private function handleCallbackQuery(TelegramBot $bot, array $callbackQuery): void
     {
         $chatId = $callbackQuery['message']['chat']['id'];
+        $messageId = $callbackQuery['message']['message_id'];
+        $telegramUserId = $callbackQuery['from']['id'];
         $data = $callbackQuery['data'] ?? '';
 
         // Answer callback query
@@ -2378,14 +2843,267 @@ PYTHON;
             'callback_query_id' => $callbackQuery['id'],
         ]);
 
-        // Handle callback data
-        // TODO: Implement callback handling if needed
+        Log::info('Handling callback query', ['data' => $data, 'user_id' => $telegramUserId]);
+
+        // Check if raffle mode
+        $botSettings = BotSettings::where('telegram_bot_id', $bot->id)->first();
+        if (!$botSettings || !$botSettings->is_active) {
+            return; // No raffle mode, ignore callbacks
+        }
+
+        // Get bot user
+        $botUser = BotUser::where('telegram_bot_id', $bot->id)
+            ->where('telegram_user_id', $telegramUserId)
+            ->first();
+
+        if (!$botUser) {
+            return;
+        }
+
+        // Handle navigation
+        switch ($data) {
+            case 'cancel':
+            case 'home':
+                $botUser->update(['fsm_state' => BotUser::STATE_IDLE]);
+                $this->editMessageText($bot, $chatId, $messageId, "Действие отменено.\n\nОтправьте /start чтобы начать заново.");
+                return;
+
+            case 'back':
+                $this->handleBackButton($bot, $botUser, $chatId, $messageId, $botSettings);
+                return;
+
+            case 'participate':
+                // Start data collection
+                $botUser->update(['fsm_state' => BotUser::STATE_WAIT_FIO]);
+                $msg = $botSettings->msg_ask_fio ?? "📝 Введите ваше ФИО (Фамилия Имя Отчество):";
+                $keyboard = $this->getBackCancelKeyboard();
+                $this->editMessageText($bot, $chatId, $messageId, $msg, $keyboard);
+                $botUser->update(['last_bot_message_id' => $messageId]);
+                return;
+
+            case 'confirm_data':
+                // Show QR code
+                $this->showQrCode($bot, $botUser, $chatId, $botSettings);
+                return;
+
+            case 'retry_data':
+                // Reset data and start over
+                $botUser->update([
+                    'fio_encrypted' => null,
+                    'phone_encrypted' => null,
+                    'inn_encrypted' => null,
+                    'fsm_state' => BotUser::STATE_WAIT_FIO
+                ]);
+                $msg = $botSettings->msg_ask_fio ?? "📝 Введите ваше ФИО (Фамилия Имя Отчество):";
+                $keyboard = $this->getBackCancelKeyboard();
+                $this->editMessageText($bot, $chatId, $messageId, $msg, $keyboard);
+                return;
+
+            case 'back_to_confirm':
+                $botUser->update(['fsm_state' => BotUser::STATE_CONFIRM_DATA]);
+                $this->showConfirmData($bot, $botUser, $chatId, $botSettings);
+                return;
+                
+            case 'send_check_again':
+                $botUser->update(['fsm_state' => BotUser::STATE_WAIT_CHECK]);
+                $msg = $botSettings->msg_wait_check ?? "📤 Отправьте фото чека или PDF-файл для подтверждения оплаты.";
+                $keyboard = [
+                    'inline_keyboard' => [
+                        [['text' => '❌ Отмена', 'callback_data' => 'cancel']]
+                    ]
+                ];
+                $this->editMessageText($bot, $chatId, $messageId, $msg, $keyboard);
+                return;
+        }
+
+        // Handle admin callbacks (approve/reject checks)
+        if (str_starts_with($data, 'admin_approve_')) {
+            $checkId = (int) str_replace('admin_approve_', '', $data);
+            $this->handleAdminApproveCheck($bot, $botUser, $chatId, $messageId, $checkId, $botSettings);
+            return;
+        }
+
+        if (str_starts_with($data, 'admin_reject_')) {
+            $checkId = (int) str_replace('admin_reject_', '', $data);
+            $this->handleAdminRejectCheck($bot, $botUser, $chatId, $messageId, $checkId, $botSettings);
+            return;
+        }
+    }
+
+    /**
+     * Handle back button navigation
+     */
+    private function handleBackButton(TelegramBot $bot, BotUser $botUser, int $chatId, int $messageId, BotSettings $settings): void
+    {
+        $state = $botUser->fsm_state;
+        $keyboard = $this->getBackCancelKeyboard();
+
+        switch ($state) {
+            case BotUser::STATE_WAIT_PHONE:
+                $botUser->update(['fsm_state' => BotUser::STATE_WAIT_FIO]);
+                $msg = $settings->msg_ask_fio ?? "📝 Введите ваше ФИО (Фамилия Имя Отчество):";
+                $this->editMessageText($bot, $chatId, $messageId, $msg, $keyboard);
+                break;
+
+            case BotUser::STATE_WAIT_INN:
+                $botUser->update(['fsm_state' => BotUser::STATE_WAIT_PHONE]);
+                $msg = $settings->msg_ask_phone ?? "📱 Введите номер телефона в формате +7XXXXXXXXXX:";
+                $this->editMessageText($bot, $chatId, $messageId, $msg, $keyboard);
+                break;
+
+            case BotUser::STATE_CONFIRM_DATA:
+                $botUser->update(['fsm_state' => BotUser::STATE_WAIT_INN]);
+                $msg = $settings->msg_ask_inn ?? "🔢 Введите ваш ИНН (10 или 12 цифр):";
+                $this->editMessageText($bot, $chatId, $messageId, $msg, $keyboard);
+                break;
+
+            default:
+                // Go to welcome
+                $this->handleRaffleStart($bot, $botUser, $chatId, $settings);
+                break;
+        }
+    }
+
+    /**
+     * Handle admin approve check via Telegram
+     */
+    private function handleAdminApproveCheck(TelegramBot $bot, BotUser $admin, int $chatId, int $messageId, int $checkId, BotSettings $settings): void
+    {
+        if (!$admin->isAdmin()) {
+            $this->sendMessage($bot, $chatId, "❌ У вас нет прав для этого действия.");
+            return;
+        }
+
+        $check = Check::with('botUser')->find($checkId);
+        if (!$check) {
+            $this->editMessageText($bot, $chatId, $messageId, "❌ Чек не найден.");
+            return;
+        }
+
+        if ($check->review_status !== 'pending') {
+            $this->editMessageText($bot, $chatId, $messageId, "⚠️ Этот чек уже был обработан.");
+            return;
+        }
+
+        $amount = $check->admin_edited_amount ?? $check->amount;
+        if (!$amount || $amount < $settings->slot_price) {
+            $this->editMessageText($bot, $chatId, $messageId, "❌ Сумма ({$amount} ₽) меньше стоимости одного места ({$settings->slot_price} ₽).\n\nИспользуйте админ-панель для редактирования суммы.");
+            return;
+        }
+
+        $ticketsCount = floor($amount / $settings->slot_price);
+        $availableSlots = $settings->getAvailableSlotsCount();
+
+        if ($ticketsCount > $availableSlots) {
+            $this->editMessageText($bot, $chatId, $messageId, "❌ Недостаточно мест. Доступно: {$availableSlots}, требуется: {$ticketsCount}");
+            return;
+        }
+
+        // Issue tickets
+        $issuedTickets = [];
+        for ($i = 0; $i < $ticketsCount; $i++) {
+            $ticket = \App\Models\Ticket::where('telegram_bot_id', $bot->id)
+                ->whereNull('bot_user_id')
+                ->orderBy('number')
+                ->first();
+
+            if ($ticket) {
+                $ticket->update([
+                    'bot_user_id' => $check->bot_user_id,
+                    'check_id' => $check->id,
+                    'issued_at' => now(),
+                ]);
+                $issuedTickets[] = $ticket->number;
+            }
+        }
+
+        // Update check
+        $check->update([
+            'review_status' => 'approved',
+            'tickets_count' => count($issuedTickets),
+        ]);
+
+        // Update user state
+        if ($check->botUser) {
+            $check->botUser->update(['fsm_state' => BotUser::STATE_APPROVED]);
+
+            // Notify user
+            $ticketsList = implode(', ', $issuedTickets);
+            $userMsg = $settings->msg_check_approved ?? "🎉 Платёж подтверждён!\n\nВаши номерки: {tickets}\n\nУдачи в розыгрыше!";
+            $userMsg = str_replace('{tickets}', $ticketsList, $userMsg);
+            $this->sendMessage($bot, $check->botUser->telegram_user_id, $userMsg);
+        }
+
+        // Update admin message
+        $this->editMessageText($bot, $chatId, $messageId, "✅ Чек #{$checkId} одобрен!\n\nВыдано номерков: " . count($issuedTickets) . "\nНомера: " . implode(', ', $issuedTickets));
+
+        // Log action
+        \App\Models\AdminActionLog::create([
+            'telegram_bot_id' => $bot->id,
+            'admin_user_id' => $admin->id,
+            'action_type' => 'check_approved_telegram',
+            'target_type' => 'check',
+            'target_id' => $checkId,
+            'new_data' => ['tickets' => $issuedTickets],
+        ]);
+    }
+
+    /**
+     * Handle admin reject check via Telegram
+     */
+    private function handleAdminRejectCheck(TelegramBot $bot, BotUser $admin, int $chatId, int $messageId, int $checkId, BotSettings $settings): void
+    {
+        if (!$admin->isAdmin()) {
+            $this->sendMessage($bot, $chatId, "❌ У вас нет прав для этого действия.");
+            return;
+        }
+
+        $check = Check::with('botUser')->find($checkId);
+        if (!$check) {
+            $this->editMessageText($bot, $chatId, $messageId, "❌ Чек не найден.");
+            return;
+        }
+
+        if ($check->review_status !== 'pending') {
+            $this->editMessageText($bot, $chatId, $messageId, "⚠️ Этот чек уже был обработан.");
+            return;
+        }
+
+        // Update check
+        $check->update(['review_status' => 'rejected']);
+
+        // Update user state
+        if ($check->botUser) {
+            $check->botUser->update(['fsm_state' => BotUser::STATE_REJECTED]);
+
+            // Notify user
+            $userMsg = $settings->msg_check_rejected ?? "❌ Чек не принят.\n\nПроверьте оплату и отправьте чек повторно.";
+            $keyboard = [
+                'inline_keyboard' => [
+                    [['text' => '🔄 Отправить заново', 'callback_data' => 'send_check_again']],
+                    [['text' => '🏠 В начало', 'callback_data' => 'home']]
+                ]
+            ];
+            $this->sendMessageWithKeyboard($bot, $check->botUser->telegram_user_id, $userMsg, $keyboard);
+        }
+
+        // Update admin message
+        $this->editMessageText($bot, $chatId, $messageId, "❌ Чек #{$checkId} отклонён.");
+
+        // Log action
+        \App\Models\AdminActionLog::create([
+            'telegram_bot_id' => $bot->id,
+            'admin_user_id' => $admin->id,
+            'action_type' => 'check_rejected_telegram',
+            'target_type' => 'check',
+            'target_id' => $checkId,
+        ]);
     }
 
     /**
      * Send message to user
      */
-    private function sendMessage(TelegramBot $bot, int $chatId, string $text): void
+    private function sendMessage(TelegramBot $bot, int $chatId, string $text): ?array
     {
         try {
             Log::info('Sending message to Telegram', [
@@ -2403,6 +3121,7 @@ PYTHON;
 
             if ($response->successful()) {
                 Log::info('Message sent successfully');
+                return $response->json('result');
             } else {
                 Log::error('Failed to send message', [
                     'status' => $response->status(),
@@ -2414,5 +3133,160 @@ PYTHON;
                 'trace' => $e->getTraceAsString()
             ]);
         }
+        return null;
+    }
+
+    /**
+     * Send message with inline keyboard
+     */
+    private function sendMessageWithKeyboard(TelegramBot $bot, int $chatId, string $text, array $keyboard): ?array
+    {
+        try {
+            $response = Http::timeout(10)
+                ->post("https://api.telegram.org/bot{$bot->token}/sendMessage", [
+                    'chat_id' => $chatId,
+                    'text' => $text,
+                    'parse_mode' => 'HTML',
+                    'reply_markup' => json_encode($keyboard),
+                ]);
+
+            if ($response->successful()) {
+                return $response->json('result');
+            }
+        } catch (\Exception $e) {
+            Log::error('Error sending message with keyboard: ' . $e->getMessage());
+        }
+        return null;
+    }
+
+    /**
+     * Edit message text
+     */
+    private function editMessageText(TelegramBot $bot, int $chatId, int $messageId, string $text, ?array $keyboard = null): ?array
+    {
+        try {
+            $params = [
+                'chat_id' => $chatId,
+                'message_id' => $messageId,
+                'text' => $text,
+                'parse_mode' => 'HTML',
+            ];
+
+            if ($keyboard) {
+                $params['reply_markup'] = json_encode($keyboard);
+            }
+
+            $response = Http::timeout(10)
+                ->post("https://api.telegram.org/bot{$bot->token}/editMessageText", $params);
+
+            if ($response->successful()) {
+                return $response->json('result');
+            }
+        } catch (\Exception $e) {
+            Log::error('Error editing message: ' . $e->getMessage());
+        }
+        return null;
+    }
+
+    /**
+     * Edit or send message (send new if edit fails)
+     */
+    private function editOrSendMessage(TelegramBot $bot, int $chatId, ?int $messageId, string $text, ?array $keyboard = null): ?array
+    {
+        if ($messageId) {
+            $result = $this->editMessageText($bot, $chatId, $messageId, $text, $keyboard);
+            if ($result) {
+                return $result;
+            }
+        }
+        
+        return $keyboard 
+            ? $this->sendMessageWithKeyboard($bot, $chatId, $text, $keyboard)
+            : $this->sendMessage($bot, $chatId, $text);
+    }
+
+    /**
+     * Delete message
+     */
+    private function deleteMessage(TelegramBot $bot, int $chatId, int $messageId): bool
+    {
+        try {
+            $response = Http::timeout(10)
+                ->post("https://api.telegram.org/bot{$bot->token}/deleteMessage", [
+                    'chat_id' => $chatId,
+                    'message_id' => $messageId,
+                ]);
+
+            return $response->successful();
+        } catch (\Exception $e) {
+            Log::warning('Error deleting message: ' . $e->getMessage());
+            return false;
+        }
+    }
+
+    /**
+     * Send photo
+     */
+    private function sendPhoto(TelegramBot $bot, int $chatId, string $filePath, ?string $caption = null, ?array $keyboard = null): ?array
+    {
+        try {
+            $params = [
+                'chat_id' => $chatId,
+            ];
+
+            if ($caption) {
+                $params['caption'] = $caption;
+                $params['parse_mode'] = 'HTML';
+            }
+
+            if ($keyboard) {
+                $params['reply_markup'] = json_encode($keyboard);
+            }
+
+            $response = Http::timeout(30)
+                ->attach('photo', file_get_contents($filePath), basename($filePath))
+                ->post("https://api.telegram.org/bot{$bot->token}/sendPhoto", $params);
+
+            if ($response->successful()) {
+                return $response->json('result');
+            } else {
+                Log::error('Failed to send photo', ['status' => $response->status(), 'body' => $response->body()]);
+            }
+        } catch (\Exception $e) {
+            Log::error('Error sending photo: ' . $e->getMessage());
+        }
+        return null;
+    }
+
+    /**
+     * Send document
+     */
+    private function sendDocument(TelegramBot $bot, int $chatId, string $filePath, ?string $caption = null, ?array $keyboard = null): ?array
+    {
+        try {
+            $params = [
+                'chat_id' => $chatId,
+            ];
+
+            if ($caption) {
+                $params['caption'] = $caption;
+                $params['parse_mode'] = 'HTML';
+            }
+
+            if ($keyboard) {
+                $params['reply_markup'] = json_encode($keyboard);
+            }
+
+            $response = Http::timeout(30)
+                ->attach('document', file_get_contents($filePath), basename($filePath))
+                ->post("https://api.telegram.org/bot{$bot->token}/sendDocument", $params);
+
+            if ($response->successful()) {
+                return $response->json('result');
+            }
+        } catch (\Exception $e) {
+            Log::error('Error sending document: ' . $e->getMessage());
+        }
+        return null;
     }
 }
