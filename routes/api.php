@@ -63,6 +63,10 @@ Route::middleware('auth:sanctum')->group(function () {
     
     // Admin actions log
     Route::get('/admin-actions', [\App\Http\Controllers\Api\AdminActionLogController::class, 'index']);
+
+    // Broadcast (рассылка)
+    Route::get('/broadcasts', [\App\Http\Controllers\Api\BroadcastController::class, 'index']);
+    Route::post('/broadcasts', [\App\Http\Controllers\Api\BroadcastController::class, 'store']);
     
     // Raffles routes
     Route::get('/bot/{botId}/raffles', [\App\Http\Controllers\Api\RaffleController::class, 'index']);

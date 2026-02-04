@@ -12,6 +12,7 @@ function Sidebar({ isOpen, onToggle, user, onLogout }) {
     { id: 'admin-requests', label: 'Запросы на роли', icon: '👤', path: '/admin-requests' },
     { id: 'bot-users', label: 'Пользователи', icon: '👥', path: '/bot-users' },
     { id: 'bot', label: 'Настройки бота', icon: '🤖', path: '/bot' },
+    { id: 'broadcast', label: 'Рассылка', icon: '📢', path: '/broadcast' },
     { id: 'documentation', label: 'Документация', icon: '📚', path: '/documentation' },
   ];
 

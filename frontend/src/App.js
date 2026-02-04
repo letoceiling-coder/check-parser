@@ -11,6 +11,7 @@ import AdminRequests from './pages/AdminRequests';
 import BotUsers from './pages/BotUsers';
 import Raffles from './pages/Raffles';
 import Documentation from './pages/Documentation';
+import Broadcast from './pages/Broadcast';
 import './App.css';
 
 const API_URL = process.env.REACT_APP_API_URL || window.location.origin;
@@ -132,6 +133,7 @@ function App() {
                   <Route path="/bot-users" element={<BotUsers />} />
                   <Route path="/bot" element={<Bot />} />
                   <Route path="/documentation" element={<Documentation />} />
+                  <Route path="/broadcast" element={<Broadcast />} />
                   <Route path="*" element={<Navigate to="/" replace />} />
                 </Routes>
               </Layout>

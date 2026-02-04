@@ -182,6 +182,36 @@ class TelegramService
     }
 
     /**
+     * Отправить видео
+     */
+    public function sendVideo(
+        int $chatId,
+        string $videoPath,
+        ?string $caption = null,
+        ?array $replyMarkup = null
+    ): ?array {
+        $params = [
+            'chat_id' => $chatId,
+        ];
+
+        if ($caption) {
+            $params['caption'] = $caption;
+            $params['parse_mode'] = 'HTML';
+        }
+
+        if ($replyMarkup) {
+            $params['reply_markup'] = json_encode($replyMarkup);
+        }
+
+        if (!file_exists($videoPath)) {
+            Log::error("Video file not found: {$videoPath}");
+            return null;
+        }
+
+        return $this->requestWithFile('sendVideo', $params, 'video', $videoPath);
+    }
+
+    /**
      * Ответить на callback query
      */
     public function answerCallbackQuery(
