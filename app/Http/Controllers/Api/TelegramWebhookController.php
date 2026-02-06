@@ -2010,8 +2010,8 @@ PYTHON;
             }
 
             $image = new \Imagick();
-            // Use higher DPI for better text quality
-            $image->setResolution(450, 450);
+            // Выше DPI — лучше читается «10 000» и мелкий текст в PDF (важно для суммы)
+            $image->setResolution(600, 600);
             $image->readImage($pdfPath . '[0]'); // Read first page only
             
             // Convert to RGB colorspace for better OCR
@@ -2024,19 +2024,19 @@ PYTHON;
             // Convert to grayscale for OCR
             $image->transformImageColorspace(\Imagick::COLORSPACE_GRAY);
             
-            // Improve contrast
+            // Improve contrast (умеренно, чтобы не «съесть» пробелы в «10 000»)
             $image->normalizeImage();
             $image->contrastImage(true);
             
             // Sharpen text edges
-            $image->sharpenImage(0, 1.5);
+            $image->sharpenImage(0, 1.2);
             
-            // Resize if too large
+            // Resize if too large (keep 4000 to allow 600 DPI on A4)
             $width = $image->getImageWidth();
             $height = $image->getImageHeight();
             Log::info('PDF image dimensions', ['width' => $width, 'height' => $height]);
-            if ($width > 3500 || $height > 3500) {
-                $image->scaleImage(3500, 3500, true);
+            if ($width > 4000 || $height > 4000) {
+                $image->scaleImage(4000, 4000, true);
             }
             
             $imagePath = 'telegram/pdf_' . uniqid() . '.png';
@@ -2046,7 +2046,7 @@ PYTHON;
             Log::info('PDF converted to image', [
                 'pdf_path' => $pdfPath,
                 'image_path' => $imagePath,
-                'resolution' => '450 DPI',
+                'resolution' => '600 DPI',
                 'format' => 'PNG grayscale'
             ]);
 
@@ -2497,6 +2497,23 @@ PYTHON;
     }
 
     /**
+     * Нормализация строки суммы: европейский формат "10.000" = 10 000, не 10.0
+     * В PHP (float)"10.000" = 10 — точка считается десятичной. Убираем точки-разделители тысяч.
+     */
+    private function normalizeAmountString(string $numStr): string
+    {
+        $numStr = trim($numStr);
+        // Европейский формат: "10.000" или "1.234.567" или "10.000,50" — точка как разделитель тысяч
+        if (preg_match('/^\d{1,3}(?:\.\d{3})+(?:,\d{2})?$/', $numStr)) {
+            $numStr = str_replace('.', '', $numStr);
+            $numStr = str_replace(',', '.', $numStr);
+        } elseif (preg_match('/^\d{1,3}(?:\.\d{3})+$/', $numStr)) {
+            $numStr = str_replace('.', '', $numStr);
+        }
+        return $numStr;
+    }
+
+    /**
      * Parse payment amount from extracted text
      */
     private function parsePaymentAmount(string $text): ?array
@@ -2712,8 +2729,8 @@ PYTHON;
             $directAmount = null;
             
             // 1. Ищем паттерн "Итого X XXX ₽" или "Итого\nX XXX ₽"
-            // Поддерживаем разные форматы чисел: "10 000", "10000", "10,000.00"
-            $amountRegex = '(\d{1,3}(?:[\s\x{00A0}]+\d{3})*(?:[.,]\d{2})?|\d+(?:[.,]\d{2})?)';
+            // Форматы: "10 000", "10000", "10.000" (европ. тысячи), "100,00", "10.000,50"
+            $amountRegex = '(\d{1,3}(?:[\s\x{00A0}]+\d{3})*(?:[.,]\d{2})?|\d{1,3}(?:\.\d{3})+(?:,\d{2})?|\d+(?:[.,]\d{2})?)';
             
             $directPatterns = [
                 // Итого + число + валюта (может быть на разных строках)
@@ -2732,6 +2749,7 @@ PYTHON;
             foreach ($directPatterns as $pattern) {
                 if (preg_match($pattern, $textOneLine, $match)) {
                     $numStr = preg_replace('/[\s\x{00A0}]+/u', '', $match[1]);
+                    $numStr = $this->normalizeAmountString($numStr);
                     $numStr = str_replace(',', '.', $numStr);
                     if (is_numeric($numStr)) {
                         $val = (float) $numStr;
@@ -2756,6 +2774,7 @@ PYTHON;
                 if (preg_match_all('/' . $amountRegex . '\s*' . $currencyPattern . '/ui', $textOneLine, $matches, PREG_SET_ORDER | PREG_OFFSET_CAPTURE)) {
                     foreach ($matches as $match) {
                         $numStr = preg_replace('/[\s\x{00A0}]+/u', '', $match[1][0]);
+                        $numStr = $this->normalizeAmountString($numStr);
                         $numStr = str_replace(',', '.', $numStr);
                         if (is_numeric($numStr)) {
                             $val = (float) $numStr;
@@ -2769,6 +2788,7 @@ PYTHON;
                 if (preg_match_all('/' . $amountRegex . '\s*руб\.?/ui', $textOneLine, $matches, PREG_SET_ORDER | PREG_OFFSET_CAPTURE)) {
                     foreach ($matches as $match) {
                         $numStr = preg_replace('/[\s\x{00A0}]+/u', '', $match[1][0]);
+                        $numStr = $this->normalizeAmountString($numStr);
                         $numStr = str_replace(',', '.', $numStr);
                         if (is_numeric($numStr)) {
                             $val = (float) $numStr;
@@ -2808,6 +2828,7 @@ PYTHON;
                 foreach ($keywordPatterns as $pattern) {
                     if (preg_match($pattern, $textOneLine, $match)) {
                         $numStr = preg_replace('/[\s\x{00A0}]+/u', '', $match[1]);
+                        $numStr = $this->normalizeAmountString($numStr);
                         $numStr = str_replace(',', '.', $numStr);
                         if (is_numeric($numStr)) {
                             $val = (float) $numStr;
@@ -2854,8 +2875,9 @@ PYTHON;
                         continue;
                     }
 
-                    // Normalize number - remove spaces and convert comma to dot
+                    // Normalize number - remove spaces, European thousands (10.000 -> 10000), comma to dot
                     $normalized = preg_replace('/[\s\x{00A0}]+/u', '', $rawNumTrim);
+                    $normalized = $this->normalizeAmountString($normalized);
                     $normalized = str_replace(',', '.', $normalized);
 
                     if (!is_numeric($normalized)) {
