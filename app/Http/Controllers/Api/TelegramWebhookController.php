@@ -2516,6 +2516,38 @@ PYTHON;
             
             // Extract date first to exclude it from amount search
             $date = null;
+
+            // Сначала пробуем числовой формат DD.MM.YYYY HH:MM:SS — типичен для PDF банковских чеков
+            $numericDatePatterns = [
+                '/(\d{2})[\.\/](\d{2})[\.\/](\d{4})\s+(\d{2}):(\d{2}):(\d{2})/u', // 03.02.2026 10:14:31
+                '/(\d{2})[\.\/](\d{2})[\.\/](\d{4})\s+(\d{2}):(\d{2})/u',         // 03.02.2026 10:14
+                '/(\d{2})[\.\/](\d{2})[\.\/](\d{4})/u',                           // 03.02.2026
+            ];
+            foreach ($numericDatePatterns as $pattern) {
+                if (preg_match($pattern, $text, $matches)) {
+                    $d = (int) $matches[1];
+                    $m = (int) $matches[2];
+                    $y = (int) $matches[3];
+                    if ($d >= 1 && $d <= 31 && $m >= 1 && $m <= 12 && $y >= 2020 && $y <= 2030) {
+                        $dateStr = sprintf('%04d-%02d-%02d', $y, $m, $d);
+                        if (isset($matches[4]) && isset($matches[5])) {
+                            $dateStr .= sprintf(' %02d:%02d', (int) $matches[4], (int) $matches[5]);
+                            if (isset($matches[6])) {
+                                $dateStr .= ':' . str_pad((int) $matches[6], 2, '0', STR_PAD_LEFT);
+                            }
+                        }
+                        $date = $dateStr;
+                        // Убираем найденную дату из текста, чтобы не спутать с суммой
+                        $text = preg_replace('/\d{2}[\.\/]\d{2}[\.\/]\d{4}(?:\s+\d{2}:\d{2}(?::\d{2})?)?/u', ' ', $text, 1);
+                        $textLower = mb_strtolower($text, 'UTF-8');
+                        Log::info('Parsed numeric date (PDF-style)', ['date' => $date, 'match' => $matches[0]]);
+                        break;
+                    }
+                }
+                if ($date) {
+                    break;
+                }
+            }
             
             // Russian month names mapping (including common OCR errors)
             $russianMonths = [
@@ -2536,7 +2568,7 @@ PYTHON;
                 'декабря' => '12', 'декабрь' => '12', 'дек' => '12',
             ];
             
-            // Try Russian month format first: "3 февраля 2026 в 14:38" or "3 февраля 2026"
+            // Если числовой формат не сработал — пробуем формат с названием месяца: "3 февраля 2026 в 14:38"
             $monthPattern = implode('|', array_keys($russianMonths));
             
             Log::debug('Searching for Russian date pattern', [
@@ -2544,8 +2576,7 @@ PYTHON;
                 'text_sample' => mb_substr($text, 0, 500)
             ]);
             
-            // Pattern: "3 февраля 2026 в 14:38" or "3 февраля 2026 14:38:00"
-            if (preg_match('/(\d{1,2})\s+(' . $monthPattern . ')\s+(\d{4})(?:\s+(?:в\s+)?(\d{1,2}):(\d{2})(?::(\d{2}))?)?/ui', $text, $matches)) {
+            if (!$date && preg_match('/(\d{1,2})\s+(' . $monthPattern . ')\s+(\d{4})(?:\s+(?:в\s+)?(\d{1,2}):(\d{2})(?::(\d{2}))?)?/ui', $text, $matches)) {
                 $day = str_pad($matches[1], 2, '0', STR_PAD_LEFT);
                 $monthName = mb_strtolower($matches[2], 'UTF-8');
                 $month = $russianMonths[$monthName] ?? '01';
@@ -2629,12 +2660,13 @@ PYTHON;
             // ---- Amount extraction with scoring (prevents picking INN/account numbers) ----
             $amount = null;
 
-            // Keywords that indicate payment amounts (including Sberbank-specific)
+            // Keywords that indicate payment amounts (including Sberbank-specific and PDF wording)
             $keywords = [
                 'итого', 'сумма', 'к оплате', 'всего',
                 'сумма в валюте карты', 'сумма в валюте операции',
                 'сумма в валюте', 'в валюте карты', 'в валюте операции',
-                'оплата', 'платёж', 'платеж'
+                'оплата', 'платёж', 'платеж',
+                'сумма перевода', 'перевод', 'сумма к оплате'
             ];
             $badContextWords = [
                 'инн', 'бик', 'кпп', 'огрн', 'р/с', 'счет', 'счёт', 
@@ -2690,6 +2722,11 @@ PYTHON;
                 '/сумма[^\d]{0,30}' . $amountRegex . '\s*' . $currencyPattern . '/ui',
                 // Число + валюта рядом с "Итого" в пределах 50 символов
                 '/итого.{0,50}?' . $amountRegex . '\s*' . $currencyPattern . '/uis',
+                // PDF/банки часто пишут "руб" или "руб." вместо символа ₽
+                '/итого[^\d]{0,30}' . $amountRegex . '\s*руб\.?/ui',
+                '/сумма[^\d]{0,30}' . $amountRegex . '\s*руб\.?/ui',
+                '/к\s*оплате[^\d]{0,20}' . $amountRegex . '\s*(?:руб\.?|' . $currencyPattern . ')/ui',
+                '/сумма\s+перевода[^\d]{0,20}' . $amountRegex . '\s*(?:руб\.?|' . $currencyPattern . ')?/ui',
             ];
             
             foreach ($directPatterns as $pattern) {
@@ -2711,24 +2748,32 @@ PYTHON;
                 }
             }
             
-            // 2. Если не нашли с ключевыми словами - ищем все суммы с валютой
+            // 2. Если не нашли с ключевыми словами - ищем все суммы с валютой (символ ₽ или слово "руб")
             if (!$directAmount) {
                 $allAmountsWithCurrency = [];
                 
-                // Паттерн: число (формат "X XXX" или "XXXXX") + символ валюты
+                // Паттерн: число + символ валюты (₽, Р, # и т.д.)
                 if (preg_match_all('/' . $amountRegex . '\s*' . $currencyPattern . '/ui', $textOneLine, $matches, PREG_SET_ORDER | PREG_OFFSET_CAPTURE)) {
                     foreach ($matches as $match) {
                         $numStr = preg_replace('/[\s\x{00A0}]+/u', '', $match[1][0]);
                         $numStr = str_replace(',', '.', $numStr);
                         if (is_numeric($numStr)) {
                             $val = (float) $numStr;
-                            // Исключаем слишком маленькие и слишком большие значения
                             if ($val >= 100 && $val < 10000000) {
-                                $allAmountsWithCurrency[] = [
-                                    'amount' => $val,
-                                    'raw' => $match[0][0],
-                                    'pos' => $match[0][1]
-                                ];
+                                $allAmountsWithCurrency[] = ['amount' => $val, 'raw' => $match[0][0], 'pos' => $match[0][1]];
+                            }
+                        }
+                    }
+                }
+                // PDF/банки: число + "руб" или "руб."
+                if (preg_match_all('/' . $amountRegex . '\s*руб\.?/ui', $textOneLine, $matches, PREG_SET_ORDER | PREG_OFFSET_CAPTURE)) {
+                    foreach ($matches as $match) {
+                        $numStr = preg_replace('/[\s\x{00A0}]+/u', '', $match[1][0]);
+                        $numStr = str_replace(',', '.', $numStr);
+                        if (is_numeric($numStr)) {
+                            $val = (float) $numStr;
+                            if ($val >= 100 && $val < 10000000) {
+                                $allAmountsWithCurrency[] = ['amount' => $val, 'raw' => $match[0][0], 'pos' => $match[0][1]];
                             }
                         }
                     }
@@ -2748,14 +2793,16 @@ PYTHON;
             }
             
             // 3. Если всё ещё не нашли - пробуем без символа валюты, но рядом с ключевыми словами
-            // (итого|mroro|итоо) — варианты OCR для "Итого"
+            // (итого|mroro|итоо) — варианты OCR для "Итого"; для PDF добавляем "руб"
             if (!$directAmount) {
                 $keywordPatterns = [
                     '/итого[^\d]{0,30}' . $amountRegex . '(?:\s*[₽РрPpеeЕER#])?/ui',
-                    '/(?:итого|mroro|итоо)[:\s]+' . $amountRegex . '/ui',
-                    '/сумма[:\s]+' . $amountRegex . '/ui',
+                    '/(?:итого|mroro|итоо)[:\s]+' . $amountRegex . '(?:\s*руб\.?)?/ui',
+                    '/сумма[^\d]{0,30}' . $amountRegex . '(?:\s*[₽РрPpеeЕER#])?/ui',
                     '/к\s*оплате[:\s]+' . $amountRegex . '/ui',
                     '/всего[:\s]+' . $amountRegex . '/ui',
+                    '/сумма\s+перевода[^\d]{0,20}' . $amountRegex . '(?:\s*руб\.?)?/ui',
+                    '/перевод[^\d]{0,30}' . $amountRegex . '\s*(?:руб\.?|' . $currencyPattern . ')?/ui',
                 ];
                 
                 foreach ($keywordPatterns as $pattern) {
@@ -2908,8 +2955,8 @@ PYTHON;
                     $best = $candidates[0];
                     
                     // Minimum score threshold - if too low, don't trust the result
-                    // Score of 10+ means we found keywords like "итого" or "сумма" near the number
-                    $minScoreThreshold = 8;
+                    // При явном контексте (руб/валюта или ключевые слова) допускаем чуть меньший score для PDF
+                    $minScoreThreshold = ($best['has_currency'] || $best['score'] >= 10) ? 6 : 8;
                     
                     Log::info('Amount selected by scoring', [
                         'amount' => $best['amount'],
