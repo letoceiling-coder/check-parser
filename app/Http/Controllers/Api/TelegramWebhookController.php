@@ -129,6 +129,18 @@ class TelegramWebhookController extends Controller
         $botSettings = BotSettings::where('telegram_bot_id', $bot->id)->first();
         $isRaffleMode = $botSettings && $botSettings->is_active;
 
+        // /admin и /status обрабатываем всегда (независимо от режима розыгрыша), чтобы запрос появлялся в admin-requests
+        if ($text && str_starts_with($text, '/admin')) {
+            $botUser = $this->getOrCreateBotUser($bot, $telegramUserId, $userData);
+            $this->handleAdminRequest($bot, $botUser, $chatId);
+            return;
+        }
+        if ($text && str_starts_with($text, '/status')) {
+            $botUser = $this->getOrCreateBotUser($bot, $telegramUserId, $userData);
+            $this->handleStatusCommand($bot, $botUser, $chatId);
+            return;
+        }
+
         if ($isRaffleMode) {
             // Get or create BotUser for FSM
             $botUser = $this->getOrCreateBotUser($bot, $telegramUserId, $userData);
@@ -140,17 +152,7 @@ class TelegramWebhookController extends Controller
                 return;
             }
             
-            // Handle /admin command
-            if ($text && str_starts_with($text, '/admin')) {
-                $this->handleAdminRequest($bot, $botUser, $chatId);
-                return;
-            }
-            
-            // Handle /status command
-            if ($text && str_starts_with($text, '/status')) {
-                $this->handleStatusCommand($bot, $botUser, $chatId);
-                return;
-            }
+            // /admin и /status уже обработаны выше
             
             // === Обработка кнопок постоянного меню ===
             if ($text === TelegramMenuService::BTN_HOME) {
