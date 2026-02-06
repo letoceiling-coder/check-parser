@@ -20,6 +20,10 @@ class AdminRequest extends Model
         'reviewed_at' => 'datetime',
     ];
 
+    public const STATUS_PENDING = 'pending';
+    public const STATUS_APPROVED = 'approved';
+    public const STATUS_REJECTED = 'rejected';
+
     // ==========================================
     // Связи
     // ==========================================

@@ -338,7 +338,7 @@ class TelegramWebhookController extends Controller
         ]);
         
         $settings = BotSettings::where('telegram_bot_id', $bot->id)->first();
-        $message = $settings->msg_admin_request_sent ?? "Ваш запрос на роль администратора отправлен и ожидает рассмотрения.";
+        $message = $settings?->msg_admin_request_sent ?? "Ваш запрос на роль администратора отправлен и ожидает рассмотрения.";
         $this->sendMessage($bot, $chatId, $message);
     }
     
