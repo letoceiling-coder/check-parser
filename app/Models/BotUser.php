@@ -224,7 +224,7 @@ class BotUser extends Model
      */
     public function hasAllPersonalData(): bool
     {
-        return $this->fio_encrypted && $this->phone_encrypted && $this->inn_encrypted;
+        return $this->fio_encrypted && $this->phone_encrypted;
     }
 
     /**

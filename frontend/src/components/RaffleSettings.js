@@ -138,6 +138,7 @@ function RaffleSettings({ bot }) {
 
       if (response.ok) {
         setSuccess('QR-код загружен!');
+        setSettings(prev => (prev ? { ...prev, qr_image_path: data.qr_image_path } : prev));
         fetchSettings();
       } else {
         setError(data.message || 'Ошибка загрузки QR-кода');
@@ -436,7 +437,7 @@ function RaffleSettings({ bot }) {
           <h3 className="text-lg font-semibold text-gray-800">💬 Настройка сообщений бота</h3>
           <p className="text-sm text-gray-500">
             Оставьте поле пустым для использования сообщения по умолчанию.
-            Переменные: {'{price}'}, {'{available_slots}'}, {'{total_slots}'}, {'{fio}'}, {'{phone}'}, {'{inn}'}, {'{tickets}'}, {'{reason}'}, {'{status_info}'}
+            Переменные: {'{price}'}, {'{available_slots}'}, {'{total_slots}'}, {'{fio}'}, {'{phone}'}, {'{tickets}'}, {'{reason}'}, {'{status_info}'}
           </p>
 
           <div className="space-y-4">
@@ -446,8 +447,7 @@ function RaffleSettings({ bot }) {
               { key: 'no_slots', label: 'Нет мест', placeholder: 'К сожалению, все места заняты...' },
               { key: 'ask_fio', label: 'Запрос ФИО', placeholder: 'Введите ваше ФИО...' },
               { key: 'ask_phone', label: 'Запрос телефона', placeholder: 'Введите номер телефона...' },
-              { key: 'ask_inn', label: 'Запрос ИНН', placeholder: 'Введите ваш ИНН...' },
-              { key: 'confirm_data', label: 'Подтверждение данных', placeholder: 'Проверьте данные: {fio}, {phone}, {inn}' },
+              { key: 'confirm_data', label: 'Подтверждение данных', placeholder: 'Проверьте данные: {fio}, {phone}' },
               { key: 'show_qr', label: 'Показ QR-кода', placeholder: 'Оплатите {price} ₽...' },
               { key: 'wait_check', label: 'Ожидание чека', placeholder: 'Отправьте чек...' },
               { key: 'check_received', label: 'Чек получен', placeholder: 'Чек отправлен на проверку...' },

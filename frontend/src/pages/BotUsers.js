@@ -241,7 +241,6 @@ function BotUsers() {
                     <div className="space-y-1 text-sm">
                       <p><strong>ФИО:</strong> {userDetails.fio}</p>
                       <p><strong>Телефон:</strong> {userDetails.phone}</p>
-                      <p><strong>ИНН:</strong> {userDetails.inn}</p>
                     </div>
                   </div>
                 )}

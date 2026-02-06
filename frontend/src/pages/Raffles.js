@@ -9,6 +9,11 @@ function Raffles() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [botId, setBotId] = useState(null);
+  const [editModal, setEditModal] = useState({ open: false, raffle: null });
+  const [editName, setEditName] = useState('');
+  const [editTotalSlots, setEditTotalSlots] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [editError, setEditError] = useState(null);
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -99,6 +104,57 @@ function Raffles() {
     );
   };
 
+  const openEditModal = (raffle, e) => {
+    if (e) e.stopPropagation();
+    setEditModal({ open: true, raffle });
+    setEditName(raffle.name || '');
+    setEditTotalSlots(String(raffle.total_slots ?? 500));
+    setEditError(null);
+  };
+
+  const closeEditModal = () => {
+    setEditModal({ open: false, raffle: null });
+    setEditError(null);
+  };
+
+  const saveRaffleEdit = async () => {
+    if (!editModal.raffle || !botId) return;
+    const totalSlots = parseInt(editTotalSlots, 10);
+    const minSlots = Math.max(1, editModal.raffle.tickets_issued || 0);
+    if (isNaN(totalSlots) || totalSlots < minSlots || totalSlots > 10000) {
+      setEditError(`Количество наклеек: от ${minSlots} до 10000`);
+      return;
+    }
+    setSaving(true);
+    setEditError(null);
+    try {
+      const token = localStorage.getItem('token');
+      const response = await fetch(`${API_URL}/api/bot/${botId}/raffles/${editModal.raffle.id}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`,
+          'Accept': 'application/json',
+        },
+        body: JSON.stringify({
+          name: editName.trim() || undefined,
+          total_slots: totalSlots,
+        }),
+      });
+      const data = await response.json();
+      if (response.ok) {
+        await fetchRaffles();
+        closeEditModal();
+      } else {
+        setEditError(data.message || 'Ошибка сохранения');
+      }
+    } catch (err) {
+      setEditError('Ошибка подключения');
+    } finally {
+      setSaving(false);
+    }
+  };
+
   if (loading) {
     return (
       <div className="flex justify-center items-center h-64">
@@ -183,6 +239,7 @@ function Raffles() {
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Сумма</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Победитель</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Даты</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Действия</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-200">
@@ -228,12 +285,78 @@ function Raffles() {
                       <div>Завершён: {formatDate(raffle.completed_at)}</div>
                     )}
                   </td>
+                  <td className="px-6 py-4">
+                    <button
+                      type="button"
+                      onClick={(e) => openEditModal(raffle, e)}
+                      className="text-indigo-600 hover:text-indigo-800 font-medium text-sm"
+                    >
+                      ✏️ Изменить
+                    </button>
+                  </td>
                 </tr>
               ))}
             </tbody>
           </table>
         )}
       </div>
+
+      {/* Модальное окно редактирования розыгрыша */}
+      {editModal.open && editModal.raffle && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4" onClick={closeEditModal}>
+          <div className="bg-white rounded-xl shadow-xl max-w-md w-full p-6" onClick={(e) => e.stopPropagation()}>
+            <h3 className="text-lg font-semibold text-gray-800 mb-4">Редактировать розыгрыш</h3>
+            {editError && (
+              <div className="mb-4 p-3 bg-red-50 border border-red-200 text-red-700 rounded-lg text-sm">
+                {editError}
+              </div>
+            )}
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Название</label>
+                <input
+                  type="text"
+                  value={editName}
+                  onChange={(e) => setEditName(e.target.value)}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+                  placeholder="Розыгрыш #1"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Количество наклеек (слотов)</label>
+                <input
+                  type="number"
+                  min={Math.max(1, editModal.raffle.tickets_issued || 0)}
+                  max={10000}
+                  value={editTotalSlots}
+                  onChange={(e) => setEditTotalSlots(e.target.value)}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+                />
+                <p className="mt-1 text-xs text-gray-500">
+                  Не меньше уже выданных: {editModal.raffle.tickets_issued || 0}. Максимум: 10000.
+                </p>
+              </div>
+            </div>
+            <div className="mt-6 flex gap-3 justify-end">
+              <button
+                type="button"
+                onClick={closeEditModal}
+                className="px-4 py-2 text-gray-700 bg-gray-100 rounded-lg hover:bg-gray-200"
+              >
+                Отмена
+              </button>
+              <button
+                type="button"
+                onClick={saveRaffleEdit}
+                disabled={saving}
+                className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {saving ? 'Сохранение...' : 'Сохранить'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

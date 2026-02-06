@@ -61,7 +61,7 @@ class BotSettings extends Model
         
         'msg_ask_inn' => "🔢 Введите ваш ИНН (12 цифр для физ.лица):",
         
-        'msg_confirm_data' => "✅ Проверьте введённые данные:\n\n👤 ФИО: {fio}\n📱 Телефон: {phone}\n🔢 ИНН: {inn}\n\nВсё верно?",
+        'msg_confirm_data' => "✅ Проверьте введённые данные:\n\n👤 ФИО: {fio}\n📱 Телефон: {phone}\n\nВсё верно?",
         
         'msg_show_qr' => "💳 Отсканируйте QR-код для оплаты\n\n💰 Стоимость: {price} ₽ = 1 номерок\n📝 Назначение: {payment_description}\n\nПосле оплаты отправьте чек (PDF или фото).",
         
@@ -168,10 +168,26 @@ class BotSettings extends Model
     // ==========================================
 
     /**
-     * Получить количество свободных мест
+     * Получить количество свободных мест.
+     * Использует текущий розыгрыш (total_slots - tickets_issued), чтобы корректно показывать места
+     * даже если номерки ещё не инициализированы в таблице tickets.
      */
     public function getAvailableSlotsCount(): int
     {
+        $raffle = null;
+        if ($this->current_raffle_id) {
+            $raffle = Raffle::find($this->current_raffle_id);
+        }
+        if (!$raffle || $raffle->status !== Raffle::STATUS_ACTIVE) {
+            $raffle = Raffle::getCurrentForBot($this->telegram_bot_id);
+            if ($raffle) {
+                $this->current_raffle_id = $raffle->id;
+                $this->save();
+            }
+        }
+        if ($raffle && $raffle->status === Raffle::STATUS_ACTIVE) {
+            return max(0, $raffle->total_slots - (int) $raffle->tickets_issued);
+        }
         return Ticket::where('telegram_bot_id', $this->telegram_bot_id)
             ->whereNull('bot_user_id')
             ->count();

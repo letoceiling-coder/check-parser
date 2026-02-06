@@ -184,10 +184,35 @@ class TelegramWebhookController extends Controller
             return;
         }
 
-        // Original check processing mode
-        // Handle /start command
+        // Кнопки меню пришли, но режим розыгрыша был выключен или настроек не было — создаём настройки и обрабатываем кнопку
+        $menuButtons = [
+            TelegramMenuService::BTN_HOME,
+            TelegramMenuService::BTN_ABOUT,
+            TelegramMenuService::BTN_MY_TICKETS,
+            TelegramMenuService::BTN_SUPPORT,
+        ];
+        if ($text && in_array($text, $menuButtons, true)) {
+            $botSettings = BotSettings::getOrCreate($bot->id);
+            $botUser = $this->getOrCreateBotUser($bot, $telegramUserId, $userData);
+            $menuService = new TelegramMenuService($bot);
+            if ($text === TelegramMenuService::BTN_HOME) {
+                $botUser->update(['fsm_state' => BotUser::STATE_IDLE]);
+                $this->handleRaffleStart($bot, $botUser, $chatId, $botSettings);
+            } elseif ($text === TelegramMenuService::BTN_ABOUT) {
+                $menuService->handleAboutRaffle($chatId, $botUser);
+            } elseif ($text === TelegramMenuService::BTN_MY_TICKETS) {
+                $menuService->handleMyTickets($chatId, $botUser);
+            } elseif ($text === TelegramMenuService::BTN_SUPPORT) {
+                $menuService->handleSupport($chatId);
+            }
+            return;
+        }
+
+        // /start без настроек розыгрыша — создаём настройки и показываем приветствие с меню
         if ($text && str_starts_with($text, '/start')) {
-            $this->handleStartCommand($bot, $chatId);
+            $botSettings = BotSettings::getOrCreate($bot->id);
+            $botUser = $this->getOrCreateBotUser($bot, $telegramUserId, $userData);
+            $this->handleRaffleStart($bot, $botUser, $chatId, $botSettings);
             return;
         }
 
@@ -335,6 +360,28 @@ class TelegramWebhookController extends Controller
         $photo = $message['photo'] ?? null;
         $document = $message['document'] ?? null;
         
+        // Повторная проверка кнопок меню (на случай расхождения текста из-за кодировки)
+        if ($text) {
+            $menuService = new TelegramMenuService($bot);
+            if ($text === TelegramMenuService::BTN_HOME) {
+                $botUser->update(['fsm_state' => BotUser::STATE_IDLE]);
+                $this->handleRaffleStart($bot, $botUser, $chatId, $settings);
+                return;
+            }
+            if ($text === TelegramMenuService::BTN_ABOUT) {
+                $menuService->handleAboutRaffle($chatId, $botUser);
+                return;
+            }
+            if ($text === TelegramMenuService::BTN_MY_TICKETS) {
+                $menuService->handleMyTickets($chatId, $botUser);
+                return;
+            }
+            if ($text === TelegramMenuService::BTN_SUPPORT) {
+                $menuService->handleSupport($chatId);
+                return;
+            }
+        }
+        
         $state = $botUser->fsm_state;
         
         Log::info('Processing FSM state', ['state' => $state, 'user_id' => $botUser->id, 'has_text' => !empty($text)]);
@@ -354,33 +401,14 @@ class TelegramWebhookController extends Controller
                 
             case BotUser::STATE_WAIT_PHONE:
                 if ($text) {
-                    // Basic phone validation
                     $phone = preg_replace('/[^0-9+]/', '', $text);
                     if (strlen($phone) >= 10) {
                         $botUser->phone_encrypted = encrypt($phone);
-                        $botUser->fsm_state = BotUser::STATE_WAIT_INN;
-                        $botUser->save();
-                        
-                        $msg = $settings->msg_ask_inn ?? "🔢 Введите ваш ИНН (10 или 12 цифр):";
-                        $keyboard = $this->getBackCancelKeyboard();
-                        $this->editOrSendMessage($bot, $chatId, $botUser->last_bot_message_id, $msg, $keyboard);
-                    } else {
-                        $this->sendMessage($bot, $chatId, "❌ Неверный формат телефона. Введите номер в формате +7XXXXXXXXXX:");
-                    }
-                }
-                break;
-                
-            case BotUser::STATE_WAIT_INN:
-                if ($text) {
-                    $inn = preg_replace('/[^0-9]/', '', $text);
-                    if (strlen($inn) == 10 || strlen($inn) == 12) {
-                        $botUser->inn_encrypted = encrypt($inn);
                         $botUser->fsm_state = BotUser::STATE_CONFIRM_DATA;
                         $botUser->save();
-                        
                         $this->showConfirmData($bot, $botUser, $chatId, $settings);
                     } else {
-                        $this->sendMessage($bot, $chatId, "❌ ИНН должен содержать 10 или 12 цифр. Попробуйте ещё раз:");
+                        $this->sendMessage($bot, $chatId, "❌ Неверный формат телефона. Введите номер в формате +7XXXXXXXXXX:");
                     }
                 }
                 break;
@@ -418,12 +446,11 @@ class TelegramWebhookController extends Controller
     {
         $fio = $botUser->fio_encrypted ? decrypt($botUser->fio_encrypted) : 'Не указано';
         $phone = $botUser->phone_encrypted ? decrypt($botUser->phone_encrypted) : 'Не указан';
-        $inn = $botUser->inn_encrypted ? decrypt($botUser->inn_encrypted) : 'Не указан';
         
-        $msg = $settings->msg_confirm_data ?? "Проверьте введённые данные:\n\nФИО: {fio}\nТелефон: {phone}\nИНН: {inn}\n\nВсё верно?";
+        $msg = $settings->msg_confirm_data ?? "Проверьте введённые данные:\n\nФИО: {fio}\nТелефон: {phone}\n\nВсё верно?";
         $msg = str_replace('{fio}', $fio, $msg);
         $msg = str_replace('{phone}', $phone, $msg);
-        $msg = str_replace('{inn}', $inn, $msg);
+        $msg = str_replace('{inn}', '', $msg);
         
         $keyboard = [
             'inline_keyboard' => [
@@ -442,33 +469,51 @@ class TelegramWebhookController extends Controller
     private function showQrCode(TelegramBot $bot, BotUser $botUser, int $chatId, BotSettings $settings): void
     {
         $qrPath = $settings->qr_image_path;
-        
-        if (!$qrPath || !Storage::disk('public')->exists($qrPath)) {
-            Log::error('QR image not found', ['path' => $qrPath]);
+        if (!$qrPath) {
+            Log::error('QR image path not set');
             $this->sendMessage($bot, $chatId, "❌ QR-код временно недоступен. Обратитесь к администратору.");
             return;
         }
-        
+
+        $fullPath = null;
+        if (Storage::disk('public')->exists($qrPath)) {
+            $fullPath = Storage::disk('public')->path($qrPath);
+        } elseif (file_exists(storage_path('app/public/' . $qrPath))) {
+            $fullPath = storage_path('app/public/' . $qrPath);
+        }
+
         $msg = $settings->msg_show_qr ?? "Оплатите {price} руб по QR-коду.\n\nНазначение платежа: {payment_description}\n\nПосле оплаты отправьте фото или PDF чека.";
         $msg = str_replace('{price}', number_format($settings->slot_price, 0, ',', ' '), $msg);
         $msg = str_replace('{payment_description}', $settings->payment_description ?? 'Оплата наклейки', $msg);
-        
-        // Delete old message and send photo
+
         if ($botUser->last_bot_message_id) {
             $this->deleteMessage($bot, $chatId, $botUser->last_bot_message_id);
         }
-        
+
         $keyboard = [
             'inline_keyboard' => [
                 [['text' => '◀️ Назад', 'callback_data' => 'back_to_confirm']],
                 [['text' => '❌ Отмена', 'callback_data' => 'cancel']]
             ]
         ];
-        
-        $fullPath = Storage::disk('public')->path($qrPath);
-        $result = $this->sendPhoto($bot, $chatId, $fullPath, $msg, $keyboard);
-        
-        if ($result && isset($result['message_id'])) {
+
+        $result = null;
+        if ($fullPath && is_readable($fullPath)) {
+            $result = $this->sendPhoto($bot, $chatId, $fullPath, $msg, $keyboard);
+        }
+        if (!$result) {
+            $qrUrl = $settings->getQrImageUrl();
+            if ($qrUrl) {
+                $result = $this->sendPhotoByUrl($bot, $chatId, $qrUrl, $msg, $keyboard);
+            }
+        }
+        if (!$result) {
+            Log::error('QR image not found or not readable', ['path' => $qrPath, 'storage_root' => storage_path('app/public')]);
+            $this->sendMessage($bot, $chatId, "❌ QR-код временно недоступен. Обратитесь к администратору.");
+            return;
+        }
+
+        if (isset($result['message_id'])) {
             $botUser->update([
                 'fsm_state' => BotUser::STATE_WAIT_CHECK,
                 'last_bot_message_id' => $result['message_id']
@@ -3054,11 +3099,9 @@ PYTHON;
                 return;
 
             case 'retry_data':
-                // Reset data and start over
                 $botUser->update([
                     'fio_encrypted' => null,
                     'phone_encrypted' => null,
-                    'inn_encrypted' => null,
                     'fsm_state' => BotUser::STATE_WAIT_FIO
                 ]);
                 $msg = $botSettings->msg_ask_fio ?? "📝 Введите ваше ФИО (Фамилия Имя Отчество):";
@@ -3112,15 +3155,9 @@ PYTHON;
                 $this->editMessageText($bot, $chatId, $messageId, $msg, $keyboard);
                 break;
 
-            case BotUser::STATE_WAIT_INN:
+            case BotUser::STATE_CONFIRM_DATA:
                 $botUser->update(['fsm_state' => BotUser::STATE_WAIT_PHONE]);
                 $msg = $settings->msg_ask_phone ?? "📱 Введите номер телефона в формате +7XXXXXXXXXX:";
-                $this->editMessageText($bot, $chatId, $messageId, $msg, $keyboard);
-                break;
-
-            case BotUser::STATE_CONFIRM_DATA:
-                $botUser->update(['fsm_state' => BotUser::STATE_WAIT_INN]);
-                $msg = $settings->msg_ask_inn ?? "🔢 Введите ваш ИНН (10 или 12 цифр):";
                 $this->editMessageText($bot, $chatId, $messageId, $msg, $keyboard);
                 break;
 
@@ -3495,6 +3532,35 @@ PYTHON;
             }
         } catch (\Exception $e) {
             Log::error('Error sending photo: ' . $e->getMessage());
+        }
+        return null;
+    }
+
+    /**
+     * Send photo by URL (e.g. when file on disk unavailable)
+     */
+    private function sendPhotoByUrl(TelegramBot $bot, int $chatId, string $photoUrl, ?string $caption = null, ?array $keyboard = null): ?array
+    {
+        try {
+            $params = [
+                'chat_id' => $chatId,
+                'photo' => $photoUrl,
+            ];
+            if ($caption) {
+                $params['caption'] = $caption;
+                $params['parse_mode'] = 'HTML';
+            }
+            if ($keyboard) {
+                $params['reply_markup'] = json_encode($keyboard);
+            }
+            $response = Http::timeout(30)
+                ->post("https://api.telegram.org/bot{$bot->token}/sendPhoto", $params);
+            if ($response->successful()) {
+                return $response->json('result');
+            }
+            Log::error('Failed to send photo by URL', ['status' => $response->status(), 'body' => $response->body()]);
+        } catch (\Exception $e) {
+            Log::error('Error sending photo by URL: ' . $e->getMessage());
         }
         return null;
     }

@@ -21,10 +21,11 @@ class AuthController extends Controller
             'password' => 'required|string',
         ]);
 
-        // Try to find user by username or email
-        $user = User::where('username', $request->username)
-                    ->orWhere('email', $request->username)
-                    ->first();
+        // Try to find user by username or email (case-insensitive for email)
+        $login = $request->username;
+        $user = User::where('username', $login)
+            ->orWhereRaw('LOWER(email) = ?', [mb_strtolower($login)])
+            ->first();
 
         if (!$user || !Hash::check($request->password, $user->password)) {
             throw ValidationException::withMessages([

@@ -73,6 +73,54 @@ class RaffleController extends Controller
     }
 
     /**
+     * Обновить розыгрыш (название, количество наклеек/слотов)
+     */
+    public function update(Request $request, int $botId, int $raffleId): JsonResponse
+    {
+        $bot = TelegramBot::where('user_id', $request->user()->id)
+            ->where('id', $botId)
+            ->firstOrFail();
+
+        $raffle = Raffle::where('telegram_bot_id', $bot->id)
+            ->where('id', $raffleId)
+            ->firstOrFail();
+
+        $minSlots = max(1, (int) ($raffle->tickets_issued ?? 0));
+        $validated = $request->validate([
+            'name' => 'nullable|string|max:255',
+            'total_slots' => "nullable|integer|min:{$minSlots}|max:10000",
+        ]);
+
+        if (isset($validated['name'])) {
+            $raffle->name = $validated['name'];
+        }
+        if (isset($validated['total_slots'])) {
+            $oldSlots = $raffle->total_slots;
+            $raffle->total_slots = (int) $validated['total_slots'];
+            if ($raffle->total_slots > $oldSlots) {
+                Ticket::initializeForBot($bot->id, $raffle->total_slots, $raffle->id);
+            }
+        }
+
+        $raffle->save();
+        $raffle->updateStatistics();
+
+        // Синхронизируем total_slots в BotSettings для текущего активного розыгрыша
+        if ($raffle->status === Raffle::STATUS_ACTIVE) {
+            $settings = BotSettings::where('telegram_bot_id', $bot->id)->first();
+            if ($settings && (int) $settings->current_raffle_id === (int) $raffle->id) {
+                $settings->total_slots = $raffle->total_slots;
+                $settings->save();
+            }
+        }
+
+        return response()->json([
+            'raffle' => $raffle->fresh(['winnerUser', 'winnerTicket']),
+            'message' => 'Розыгрыш обновлён',
+        ]);
+    }
+
+    /**
      * Получить текущий активный розыгрыш
      */
     public function current(Request $request, int $botId): JsonResponse

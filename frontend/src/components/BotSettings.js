@@ -83,11 +83,11 @@ function BotSettings({ bot, onBotCreated, onUpdate }) {
 
     try {
       const token = localStorage.getItem('token');
-      const url = bot 
+      const hasValidBot = bot && bot.id != null && bot.id !== '';
+      const url = hasValidBot
         ? `${API_URL}/api/bot/${bot.id}`
         : `${API_URL}/api/bot`;
-      
-      const method = bot ? 'PUT' : 'POST';
+      const method = hasValidBot ? 'PUT' : 'POST';
 
       const response = await fetch(url, {
         method,
@@ -102,7 +102,7 @@ function BotSettings({ bot, onBotCreated, onUpdate }) {
       const data = await response.json();
 
       if (response.ok) {
-        setSuccess(bot ? 'Бот успешно обновлен!' : 'Бот успешно создан! Webhook зарегистрирован.');
+        setSuccess(hasValidBot ? 'Бот успешно обновлен!' : 'Бот успешно создан! Webhook зарегистрирован.');
         if (onBotCreated) {
           onBotCreated(data);
         }

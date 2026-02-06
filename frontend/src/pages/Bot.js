@@ -26,7 +26,9 @@ function Bot() {
 
       if (response.ok) {
         const data = await response.json();
-        setBot(data);
+        // API может вернуть массив с одним ботом или один объект
+        const botData = Array.isArray(data) ? (data[0] ?? null) : data;
+        setBot(botData);
       } else if (response.status === 404) {
         setBot(null);
       } else {

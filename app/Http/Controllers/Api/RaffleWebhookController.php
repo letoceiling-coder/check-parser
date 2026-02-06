@@ -177,8 +177,10 @@ class RaffleWebhookController extends Controller
                 break;
 
             case BotFSM::STATE_WAIT_INN:
+                // ИНН убран из формы — переходим к подтверждению
                 if ($text) {
-                    $this->handleInnInput($text);
+                    $this->fsm->setState(BotFSM::STATE_CONFIRM_DATA);
+                    $this->showConfirmDataScreen();
                 }
                 break;
 
@@ -405,46 +407,8 @@ class RaffleWebhookController extends Controller
             return;
         }
 
-        // Сохраняем телефон
         $this->fsm->setData(['phone' => $phone]);
-        
-        // Переходим к вводу ИНН
-        $this->fsm->setState(BotFSM::STATE_WAIT_INN);
-        
-        $this->telegram->sendOrEditMessage(
-            $this->botUser,
-            $this->settings->getMessage('ask_inn'),
-            $this->fsm->getInputKeyboard()
-        );
-    }
-
-    /**
-     * Обработка ввода ИНН
-     */
-    private function handleInnInput(string $text): void
-    {
-        $text = trim($text);
-
-        // Убираем пробелы и дефисы
-        $inn = preg_replace('/[\s\-]/', '', $text);
-
-        // Валидация ИНН (10 или 12 цифр)
-        if (!preg_match('/^\d{10}$|^\d{12}$/', $inn)) {
-            $this->telegram->sendOrEditMessage(
-                $this->botUser,
-                "❌ ИНН должен содержать 10 или 12 цифр.\n\n" 
-                . $this->settings->getMessage('ask_inn'),
-                $this->fsm->getInputKeyboard()
-            );
-            return;
-        }
-
-        // Сохраняем ИНН
-        $this->fsm->setData(['inn' => $inn]);
-        
-        // Переходим к подтверждению данных
         $this->fsm->setState(BotFSM::STATE_CONFIRM_DATA);
-        
         $this->showConfirmDataScreen();
     }
 
@@ -455,12 +419,11 @@ class RaffleWebhookController extends Controller
     {
         $fio = $this->fsm->getData('fio');
         $phone = $this->fsm->getData('phone');
-        $inn = $this->fsm->getData('inn');
 
         $message = $this->settings->getMessage('confirm_data', [
             'fio' => $fio,
             'phone' => $phone,
-            'inn' => $inn,
+            'inn' => '',
         ]);
 
         $this->telegram->sendOrEditMessage(
@@ -542,10 +505,8 @@ class RaffleWebhookController extends Controller
     {
         $chatId = $this->botUser->telegram_user_id;
 
-        // Сохраняем персональные данные пользователя
         $this->botUser->fio = $this->fsm->getData('fio');
         $this->botUser->phone = $this->fsm->getData('phone');
-        $this->botUser->inn = $this->fsm->getData('inn');
         $this->botUser->save();
 
         // TODO: Здесь можно добавить OCR для распознавания суммы
@@ -709,22 +670,11 @@ class RaffleWebhookController extends Controller
                 );
                 break;
 
-            case BotFSM::STATE_WAIT_INN:
-                // Возврат к вводу телефона
+            case BotFSM::STATE_CONFIRM_DATA:
                 $this->fsm->setState(BotFSM::STATE_WAIT_PHONE);
                 $this->telegram->sendOrEditMessage(
                     $this->botUser,
                     $this->settings->getMessage('ask_phone'),
-                    $this->fsm->getInputKeyboard()
-                );
-                break;
-
-            case BotFSM::STATE_CONFIRM_DATA:
-                // Возврат к вводу ИНН
-                $this->fsm->setState(BotFSM::STATE_WAIT_INN);
-                $this->telegram->sendOrEditMessage(
-                    $this->botUser,
-                    $this->settings->getMessage('ask_inn'),
                     $this->fsm->getInputKeyboard()
                 );
                 break;
@@ -767,10 +717,8 @@ class RaffleWebhookController extends Controller
      */
     private function onConfirmData(): void
     {
-        // Сохраняем данные в зашифрованном виде
         $this->botUser->fio = $this->fsm->getData('fio');
         $this->botUser->phone = $this->fsm->getData('phone');
-        $this->botUser->inn = $this->fsm->getData('inn');
         $this->botUser->save();
 
         // Переходим к показу QR-кода
