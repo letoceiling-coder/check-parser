@@ -51,6 +51,7 @@ class RaffleSettingsController extends Controller
             'slot_price' => 'nullable|numeric|min:1',
             'slots_mode' => 'nullable|in:sequential,random',
             'is_active' => 'nullable|boolean',
+            'receipt_parser_method' => 'nullable|in:legacy,enhanced',
             'payment_description' => 'nullable|string|max:255',
             'support_contact' => 'nullable|string|max:255',
             'raffle_info' => 'nullable|string|max:4000',

@@ -16,6 +16,7 @@ function RaffleSettings({ bot }) {
     slot_price: 10000,
     slots_mode: 'sequential',
     is_active: true,
+    receipt_parser_method: 'legacy',
     payment_description: 'Оплата наклейки',
     support_contact: '',
     raffle_info: '',
@@ -51,6 +52,7 @@ function RaffleSettings({ bot }) {
           slot_price: data.settings.slot_price,
           slots_mode: data.settings.slots_mode,
           is_active: data.settings.is_active,
+          receipt_parser_method: data.settings.receipt_parser_method || 'legacy',
           payment_description: data.settings.payment_description || '',
           support_contact: data.settings.support_contact || '',
           raffle_info: data.settings.raffle_info || '',
@@ -330,6 +332,25 @@ function RaffleSettings({ bot }) {
             <label htmlFor="is_active" className="text-gray-700">
               Розыгрыш активен (принимаются платежи)
             </label>
+          </div>
+
+          <div className="grid grid-cols-2 gap-6">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Метод определения суммы и даты из чеков
+              </label>
+              <select
+                value={formData.receipt_parser_method || 'legacy'}
+                onChange={(e) => setFormData({ ...formData, receipt_parser_method: e.target.value })}
+                className="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-purple-500"
+              >
+                <option value="legacy">Классический (текущий)</option>
+                <option value="enhanced">Улучшенный (pdftotext, контекст даты, оплачено/списано, уверенность)</option>
+              </select>
+              <p className="mt-1 text-xs text-gray-500">
+                Улучшенный: текстовый PDF без OCR, выбор даты по контексту, маркеры «оплачено»/«списано», оценка уверенности.
+              </p>
+            </div>
           </div>
 
           {/* Информация о розыгрыше */}

@@ -42,6 +42,8 @@ class Check extends Model
         'reviewed_at',
         'tickets_count',
         'admin_edited_amount',
+        'parsing_confidence',
+        'needs_review',
     ];
 
     protected $casts = [
@@ -56,6 +58,8 @@ class Check extends Model
         'readable_ratio' => 'float',
         'tickets_count' => 'integer',
         'is_duplicate' => 'boolean',
+        'parsing_confidence' => 'float',
+        'needs_review' => 'boolean',
     ];
 
     // ==========================================

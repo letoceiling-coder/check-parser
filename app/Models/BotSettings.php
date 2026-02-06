@@ -38,7 +38,12 @@ class BotSettings extends Model
         'msg_my_tickets',
         'msg_no_tickets',
         'msg_support',
+        'receipt_parser_method',
     ];
+
+    /** Метод парсинга суммы и даты из чеков: legacy = классический, enhanced = улучшенный (pdftotext, контекст даты, оплачено/списано, confidence) */
+    public const PARSER_LEGACY = 'legacy';
+    public const PARSER_ENHANCED = 'enhanced';
 
     protected $casts = [
         'total_slots' => 'integer',
@@ -268,6 +273,7 @@ class BotSettings extends Model
                 'slot_price' => 10000.00,
                 'slots_mode' => 'sequential',
                 'is_active' => true,
+                'receipt_parser_method' => self::PARSER_LEGACY,
                 'qr_image_path' => 'bot-assets/default-qr.jpg',
                 'payment_description' => 'Оплата наклейки',
             ]

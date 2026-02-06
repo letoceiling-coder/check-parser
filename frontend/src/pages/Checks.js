@@ -199,6 +199,7 @@ function Checks() {
 
   const getOcrMethodLabel = (method) => {
     const labels = {
+      pdftotext: 'PDF (текст)',
       extractTextWithTesseract: 'Tesseract',
       extractTextWithRemoteTesseract: 'VPS',
       extractTextWithOCRspace: 'OCR.space',
@@ -327,6 +328,7 @@ function Checks() {
               className="border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
             >
               <option value="all">Все</option>
+              <option value="pdftotext">PDF (текст)</option>
               <option value="extractTextWithTesseract">Tesseract</option>
               <option value="extractTextWithRemoteTesseract">VPS Tesseract</option>
               <option value="extractTextWithOCRspace">OCR.space</option>
@@ -420,7 +422,16 @@ function Checks() {
                     <td className="px-4 py-3 text-xs text-gray-500">
                       {getOcrMethodLabel(check.ocr_method)}
                     </td>
-                    <td className="px-4 py-3">{getStatusBadge(check.status)}</td>
+                    <td className="px-4 py-3">
+                      <span className="flex flex-wrap items-center gap-2">
+                        {getStatusBadge(check.status)}
+                        {check.needs_review && (
+                          <span className="px-2 py-1 rounded text-xs font-medium bg-amber-100 text-amber-800 border border-amber-200">
+                            Требует проверки
+                          </span>
+                        )}
+                      </span>
+                    </td>
                     <td className="px-4 py-3">
                       <Link
                         to={`/checks/${check.id}`}

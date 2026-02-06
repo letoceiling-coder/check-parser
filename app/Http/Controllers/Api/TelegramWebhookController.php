@@ -664,6 +664,9 @@ class TelegramWebhookController extends Controller
                 $firstName = preg_replace('/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/u', '', $firstName);
             }
             
+            $parsingConfidence = $checkData['parsing_confidence'] ?? null;
+            $needsReview = $parsingConfidence !== null && (float) $parsingConfidence < 0.7;
+
             // Create check record
             $check = Check::create([
                 'telegram_bot_id' => $bot->id,
@@ -683,6 +686,10 @@ class TelegramWebhookController extends Controller
                 'check_date' => $checkData['date'] ?? null,
                 'ocr_method' => $checkData['ocr_method'] ?? null,
                 'raw_text' => $rawText,
+                'text_length' => $checkData['text_length'] ?? null,
+                'readable_ratio' => $checkData['readable_ratio'] ?? null,
+                'parsing_confidence' => $parsingConfidence,
+                'needs_review' => $needsReview,
                 'status' => $checkData ? 'success' : 'failed',
                 'amount_found' => isset($checkData['amount']),
                 'date_found' => isset($checkData['date']),
@@ -879,9 +886,11 @@ class TelegramWebhookController extends Controller
                 $lastFilePath = $filePath;
                 $lastFileSize = $file['file_size'] ?? null;
 
+                $settings = BotSettings::getOrCreate($bot->id);
+                $parserMethod = $settings->receipt_parser_method ?? BotSettings::PARSER_LEGACY;
                 // Process check using OCR
                 Log::info("Starting OCR processing", ['file' => $filePath]);
-                $checkData = $this->processCheckWithOCR($filePath, false);
+                $checkData = $this->processCheckWithOCR($filePath, false, $parserMethod);
                 
                 if ($checkData) {
                     Log::info("Check data successfully extracted!", ['check_data' => $checkData]);
@@ -969,9 +978,11 @@ class TelegramWebhookController extends Controller
 
             $fileSize = $file['file_size'] ?? null;
 
+            $settings = BotSettings::getOrCreate($bot->id);
+            $parserMethod = $settings->receipt_parser_method ?? BotSettings::PARSER_LEGACY;
             // Process check using OCR
             Log::info("Processing document with OCR", ['is_pdf' => $isPdf, 'file' => $filePath]);
-            $checkData = $this->processCheckWithOCR($filePath, $isPdf);
+            $checkData = $this->processCheckWithOCR($filePath, $isPdf, $parserMethod);
 
             // Send result
             if ($checkData) {
@@ -1069,6 +1080,9 @@ class TelegramWebhookController extends Controller
                     $checkData['date'] ?? null
                 );
             }
+
+            $parsingConfidence = $checkData['parsing_confidence'] ?? null;
+            $needsReview = $parsingConfidence !== null && (float) $parsingConfidence < 0.7;
             
             Check::create([
                 'telegram_bot_id' => $baseData['telegram_bot_id'],
@@ -1089,6 +1103,8 @@ class TelegramWebhookController extends Controller
                 'raw_text' => $rawText,
                 'text_length' => $checkData['text_length'] ?? null,
                 'readable_ratio' => $checkData['readable_ratio'] ?? null,
+                'parsing_confidence' => $parsingConfidence,
+                'needs_review' => $needsReview,
                 'status' => $finalStatus,
                 'amount_found' => $amountFound,
                 'date_found' => $dateFound,
@@ -1149,13 +1165,57 @@ class TelegramWebhookController extends Controller
     }
 
     /**
-     * Process check using OCR - extract text and parse payment amount
-     * Tries multiple OCR methods
+     * Извлечь текст из текстового PDF через pdftotext (без OCR).
+     * Требует poppler-utils на сервере. Возвращает null при ошибке или отсутствии текста.
      */
-    private function processCheckWithOCR(string $filePath, bool $isPdf = false): ?array
+    private function extractTextFromTextPdf(string $pdfFullPath): ?string
+    {
+        if (!file_exists($pdfFullPath) || !is_readable($pdfFullPath)) {
+            return null;
+        }
+        $pdftotext = 'pdftotext';
+        if (PHP_OS_FAMILY === 'Windows') {
+            $pdftotext = 'pdftotext'; // может быть в PATH если установлен
+        }
+        $escaped = escapeshellarg($pdfFullPath);
+        $command = "{$pdftotext} -layout -enc UTF-8 {$escaped} - 2>" . (PHP_OS_FAMILY === 'Windows' ? 'NUL' : '/dev/null');
+        try {
+            $output = shell_exec($command);
+            $text = $output ? trim($output) : '';
+            if ($text !== '' && mb_strlen($text, 'UTF-8') >= 50) {
+                Log::info('Text extracted from PDF via pdftotext', ['length' => mb_strlen($text, 'UTF-8')]);
+                return $text;
+            }
+        } catch (\Throwable $e) {
+            Log::debug('pdftotext failed: ' . $e->getMessage());
+        }
+        return null;
+    }
+
+    /**
+     * Process check using OCR - extract text and parse payment amount
+     * Tries multiple OCR methods. При enhanced и PDF сначала пробует pdftotext.
+     */
+    private function processCheckWithOCR(string $filePath, bool $isPdf = false, string $parserMethod = 'legacy'): ?array
     {
         try {
             $fullPath = Storage::disk('local')->path($filePath);
+            $useEnhanced = ($parserMethod === BotSettings::PARSER_ENHANCED);
+
+            // Улучшенный режим + PDF: сначала пробуем извлечь текст без OCR (текстовый PDF)
+            if ($isPdf && $useEnhanced) {
+                $textFromPdf = $this->extractTextFromTextPdf($fullPath);
+                if ($textFromPdf !== null && mb_strlen($textFromPdf, 'UTF-8') >= 100) {
+                    $checkData = $this->parsePaymentAmount($textFromPdf, true);
+                    if ($checkData) {
+                        $checkData['ocr_method'] = 'pdftotext';
+                        $checkData['text_length'] = mb_strlen($textFromPdf, 'UTF-8');
+                        $checkData['readable_ratio'] = 1.0;
+                        Log::info('Check parsed from text PDF (pdftotext), no OCR used');
+                        return $checkData;
+                    }
+                }
+            }
 
             // Convert PDF to image if needed
             if ($isPdf) {
@@ -1259,8 +1319,8 @@ class TelegramWebhookController extends Controller
                 return null;
             }
 
-            // Parse payment amount from text
-            $checkData = $this->parsePaymentAmount($extractedText);
+            // Parse payment amount from text (enhanced = контекст даты, оплачено/списано, confidence)
+            $checkData = $this->parsePaymentAmount($extractedText, $useEnhanced);
             
             if ($checkData) {
                 // Добавляем информацию об OCR методе для статистики
@@ -2514,13 +2574,15 @@ PYTHON;
     }
 
     /**
-     * Parse payment amount from extracted text
+     * Parse payment amount from extracted text.
+     * When $useEnhanced: adds "оплачено"/"списано" patterns, date-by-context, parsing_confidence.
      */
-    private function parsePaymentAmount(string $text): ?array
+    private function parsePaymentAmount(string $text, bool $useEnhanced = false): ?array
     {
         try {
             Log::info('Parsing payment amount from text', [
                 'text_length' => strlen($text),
+                'use_enhanced' => $useEnhanced,
                 'text_preview' => substr($text, 0, 500)
             ]);
             
@@ -2673,6 +2735,35 @@ PYTHON;
                     }
                 }
             }
+
+            // Улучшенный режим: выбор даты по контексту — несколько кандидатов дат, скоринг по близости к "дата"/"время"/"операции"/HH:MM
+            if ($useEnhanced && preg_match_all('/(\d{2})[\.\/](\d{2})[\.\/](\d{4})(?:\s+(\d{2}):(\d{2})(?::(\d{2}))?)?/u', $originalText, $dateMatches, PREG_SET_ORDER | PREG_OFFSET_CAPTURE)) {
+                $contextKeywords = ['дата', 'время', 'операции', 'операци', 'операция', 'дата и время', 'даты'];
+                $bestScore = -1;
+                $bestDateStr = null;
+                foreach ($dateMatches as $m) {
+                    $d = (int) $m[1][0]; $month = (int) $m[2][0]; $y = (int) $m[3][0];
+                    if ($d < 1 || $d > 31 || $month < 1 || $month > 12 || $y < 2020 || $y > 2030) continue;
+                    $pos = $m[0][1];
+                    $snippet = mb_strtolower(mb_substr($originalText, max(0, $pos - 60), 120), 'UTF-8');
+                    $score = 0;
+                    foreach ($contextKeywords as $kw) {
+                        if (str_contains($snippet, $kw)) $score += 10;
+                    }
+                    if (isset($m[4]) && isset($m[5])) { $score += 8; } // есть время HH:MM
+                    if (preg_match('/\d{1,2}:\d{2}/', $snippet)) $score += 5;
+                    if ($score > $bestScore) {
+                        $bestScore = $score;
+                        $bestDateStr = sprintf('%04d-%02d-%02d', $y, $month, $d);
+                        if (isset($m[4], $m[5])) $bestDateStr .= sprintf(' %02d:%02d', (int) $m[4][0], (int) $m[5][0]);
+                        if (isset($m[6])) $bestDateStr .= ':' . str_pad((int) $m[6][0], 2, '0', STR_PAD_LEFT);
+                    }
+                }
+                if ($bestDateStr !== null) {
+                    $date = $bestDateStr;
+                    Log::info('Enhanced: date selected by context', ['date' => $date, 'best_score' => $bestScore]);
+                }
+            }
             
             // ---- Amount extraction with scoring (prevents picking INN/account numbers) ----
             $amount = null;
@@ -2685,6 +2776,9 @@ PYTHON;
                 'оплата', 'платёж', 'платеж',
                 'сумма перевода', 'перевод', 'сумма к оплате'
             ];
+            if ($useEnhanced) {
+                $keywords = array_merge($keywords, ['оплачено', 'списано']);
+            }
             $badContextWords = [
                 'инн', 'бик', 'кпп', 'огрн', 'р/с', 'счет', 'счёт', 
                 'идентификатор', 'сбп', 'телефон',
@@ -2745,6 +2839,12 @@ PYTHON;
                 '/к\s*оплате[^\d]{0,20}' . $amountRegex . '\s*(?:руб\.?|' . $currencyPattern . ')/ui',
                 '/сумма\s+перевода[^\d]{0,20}' . $amountRegex . '\s*(?:руб\.?|' . $currencyPattern . ')?/ui',
             ];
+            if ($useEnhanced) {
+                $directPatterns = array_merge($directPatterns, [
+                    '/оплачено[^\d]{0,40}' . $amountRegex . '\s*(?:руб\.?|' . $currencyPattern . ')?/ui',
+                    '/списано[^\d]{0,40}' . $amountRegex . '\s*(?:руб\.?|' . $currencyPattern . ')?/ui',
+                ]);
+            }
             
             foreach ($directPatterns as $pattern) {
                 if (preg_match($pattern, $textOneLine, $match)) {
@@ -3015,14 +3115,26 @@ PYTHON;
             // Если и score низкий - всё равно возвращаем null
 
             if ($amount) {
-                Log::info('Final amount selected', ['amount' => $amount, 'date' => $date]);
-                return [
+                $parsingConfidence = null;
+                if ($useEnhanced) {
+                    $parsingConfidence = 0.5;
+                    if ($directAmount) $parsingConfidence += 0.25;
+                    if ($date) $parsingConfidence += 0.2;
+                    if (mb_strlen($originalText, 'UTF-8') >= 200) $parsingConfidence += 0.05;
+                    $parsingConfidence = min(1.0, round($parsingConfidence, 2));
+                }
+                Log::info('Final amount selected', ['amount' => $amount, 'date' => $date, 'parsing_confidence' => $parsingConfidence]);
+                $result = [
                     'sum' => $amount,
                     'amount' => $amount,
                     'date' => $date,
                     'currency' => 'RUB',
                     'raw_text' => substr($originalText, 0, 500),
                 ];
+                if ($parsingConfidence !== null) {
+                    $result['parsing_confidence'] = $parsingConfidence;
+                }
+                return $result;
             }
 
             Log::warning('No reliable amount found in text');

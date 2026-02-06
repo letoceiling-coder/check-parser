@@ -151,6 +151,7 @@ function CheckDetails() {
 
   const getOcrMethodLabel = (method) => {
     const labels = {
+      pdftotext: 'PDF (текст, без OCR)',
       extractTextWithTesseract: 'Tesseract (локальный)',
       extractTextWithRemoteTesseract: 'Tesseract (VPS)',
       extractTextWithOCRspace: 'OCR.space',
@@ -190,7 +191,14 @@ function CheckDetails() {
             ← Назад к списку
           </Link>
           <h1 className="text-2xl font-bold text-gray-800">Чек #{check.id}</h1>
-          {getStatusBadge(check.status)}
+          <span className="flex flex-wrap items-center gap-2">
+            {getStatusBadge(check.status)}
+            {check.needs_review && (
+              <span className="px-3 py-1 rounded-full text-sm font-medium bg-amber-100 text-amber-800 border border-amber-200">
+                Требует проверки
+              </span>
+            )}
+          </span>
         </div>
         <div className="flex gap-2">
           {!editing && (
@@ -404,6 +412,14 @@ function CheckDetails() {
                   <div className="text-sm text-gray-500">Тип файла</div>
                   <div className="text-gray-900">{check.file_type?.toUpperCase() || 'N/A'}</div>
                 </div>
+                {check.parsing_confidence != null && (
+                  <div>
+                    <div className="text-sm text-gray-500">Уверенность распознавания</div>
+                    <div className="text-gray-900">
+                      {Math.round(Number(check.parsing_confidence) * 100)}%
+                    </div>
+                  </div>
+                )}
               </div>
             )}
 
