@@ -2647,12 +2647,16 @@ PYTHON;
             // ==========================================
             // ПОИСК СУММЫ - улучшенная логика
             // ==========================================
-            // OCR часто путает ₽ с "е", "e", "P", "р", "R", "Р"
-            $currencyPattern = '[₽РрPpеeЕER]';
+            // OCR часто путает ₽ с "е", "e", "P", "р", "R", "Р", "#"
+            $currencyPattern = '[₽РрPpеeЕER#]';
             
             // Нормализуем текст для поиска
             $textForSearch = $text; // Оригинальный текст с переносами
             $textOneLine = preg_replace('/[\r\n]+/', ' ', $text); // Текст в одну строку
+            // Нормализация типичных OCR-ошибок: "Итого" часто распознаётся как "Mroro", "Итоо" и т.д.
+            $textOneLine = preg_replace('/\bMroro\b/iu', 'итого', $textOneLine);
+            $textOneLine = preg_replace('/\bитоо\b/iu', 'итого', $textOneLine);
+            $textOneLine = preg_replace('/\bитoго\b/iu', 'итого', $textOneLine); // латинская o
             
             Log::debug('Searching for amount in text', [
                 'text_length' => mb_strlen($text),
@@ -2730,9 +2734,11 @@ PYTHON;
             }
             
             // 3. Если всё ещё не нашли - пробуем без символа валюты, но рядом с ключевыми словами
+            // (итого|mroro|итоо) — варианты OCR для "Итого"
             if (!$directAmount) {
                 $keywordPatterns = [
-                    '/итого[:\s]+' . $amountRegex . '/ui',
+                    '/итого[^\d]{0,30}' . $amountRegex . '(?:\s*[₽РрPpеeЕER#])?/ui',
+                    '/(?:итого|mroro|итоо)[:\s]+' . $amountRegex . '/ui',
                     '/сумма[:\s]+' . $amountRegex . '/ui',
                     '/к\s*оплате[:\s]+' . $amountRegex . '/ui',
                     '/всего[:\s]+' . $amountRegex . '/ui',
