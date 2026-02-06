@@ -3136,17 +3136,46 @@ PYTHON;
         $telegramUserId = $callbackQuery['from']['id'];
         $data = $callbackQuery['data'] ?? '';
 
-        // Answer callback query
+        // Answer callback so Telegram removes loading state
         Http::post("https://api.telegram.org/bot{$bot->token}/answerCallbackQuery", [
             'callback_query_id' => $callbackQuery['id'],
         ]);
 
         Log::info('Handling callback query', ['data' => $data, 'user_id' => $telegramUserId]);
 
+        // Обработка кнопок админа (одобрить/отклонить/редактировать) — до проверки режима розыгрыша,
+        // иначе при выключенном розыгрыше клик ничего не делает
+        if (str_starts_with($data, 'admin_approve_') || str_starts_with($data, 'admin_reject_') || str_starts_with($data, 'admin_edit_')) {
+            $callbackMessage = $callbackQuery['message'] ?? [];
+            $isCaption = isset($callbackMessage['caption']);
+            $from = $callbackQuery['from'] ?? [];
+            $botUser = $this->getOrCreateBotUser($bot, $telegramUserId, [
+                'username' => $from['username'] ?? null,
+                'first_name' => $from['first_name'] ?? null,
+                'last_name' => $from['last_name'] ?? null,
+            ]);
+            $botSettings = BotSettings::where('telegram_bot_id', $bot->id)->first();
+            if (!$botUser->isAdmin()) {
+                $this->editAdminNotificationMessage($bot, $chatId, $messageId, "❌ У вас нет прав для этого действия.", ['inline_keyboard' => []], $isCaption);
+                return;
+            }
+            if (str_starts_with($data, 'admin_approve_')) {
+                $checkId = (int) str_replace('admin_approve_', '', $data);
+                $this->handleAdminApproveCheck($bot, $botUser, $chatId, $messageId, $checkId, $botSettings ?: BotSettings::getOrCreate($bot->id), $isCaption);
+            } elseif (str_starts_with($data, 'admin_reject_')) {
+                $checkId = (int) str_replace('admin_reject_', '', $data);
+                $this->handleAdminRejectCheck($bot, $botUser, $chatId, $messageId, $checkId, $botSettings ?: BotSettings::getOrCreate($bot->id), $isCaption);
+            } else {
+                $checkId = (int) str_replace('admin_edit_', '', $data);
+                $this->handleAdminEditCheck($bot, $chatId, $messageId, $checkId, $isCaption);
+            }
+            return;
+        }
+
         // Check if raffle mode
         $botSettings = BotSettings::where('telegram_bot_id', $bot->id)->first();
         if (!$botSettings || !$botSettings->is_active) {
-            return; // No raffle mode, ignore callbacks
+            return; // No raffle mode, ignore other callbacks
         }
 
         // Get bot user
@@ -3214,19 +3243,6 @@ PYTHON;
                 $this->editMessageText($bot, $chatId, $messageId, $msg, $keyboard);
                 return;
         }
-
-        // Handle admin callbacks (approve/reject checks)
-        if (str_starts_with($data, 'admin_approve_')) {
-            $checkId = (int) str_replace('admin_approve_', '', $data);
-            $this->handleAdminApproveCheck($bot, $botUser, $chatId, $messageId, $checkId, $botSettings);
-            return;
-        }
-
-        if (str_starts_with($data, 'admin_reject_')) {
-            $checkId = (int) str_replace('admin_reject_', '', $data);
-            $this->handleAdminRejectCheck($bot, $botUser, $chatId, $messageId, $checkId, $botSettings);
-            return;
-        }
     }
 
     /**
@@ -3258,29 +3274,58 @@ PYTHON;
     }
 
     /**
+     * Редактировать текст сообщения или подпись (для фото/документа)
+     */
+    private function editAdminNotificationMessage(TelegramBot $bot, int $chatId, int $messageId, string $text, array $keyboard, bool $isCaption): void
+    {
+        if ($isCaption) {
+            try {
+                $params = [
+                    'chat_id' => $chatId,
+                    'message_id' => $messageId,
+                    'caption' => $text,
+                    'reply_markup' => json_encode($keyboard),
+                ];
+                Http::timeout(10)->post("https://api.telegram.org/bot{$bot->token}/editMessageCaption", $params);
+            } catch (\Exception $e) {
+                Log::warning('Edit caption failed, trying editMessageReplyMarkup: ' . $e->getMessage());
+                Http::timeout(10)->post("https://api.telegram.org/bot{$bot->token}/editMessageReplyMarkup", [
+                    'chat_id' => $chatId,
+                    'message_id' => $messageId,
+                    'reply_markup' => json_encode($keyboard),
+                ]);
+            }
+        } else {
+            $this->editMessageText($bot, $chatId, $messageId, $text, $keyboard);
+        }
+    }
+
+    /**
      * Handle admin approve check via Telegram
      */
-    private function handleAdminApproveCheck(TelegramBot $bot, BotUser $admin, int $chatId, int $messageId, int $checkId, BotSettings $settings): void
+    private function handleAdminApproveCheck(TelegramBot $bot, BotUser $admin, int $chatId, int $messageId, int $checkId, BotSettings $settings, bool $isCaption = false): void
     {
         if (!$admin->isAdmin()) {
             $this->sendMessage($bot, $chatId, "❌ У вас нет прав для этого действия.");
             return;
         }
 
+        $emptyKeyboard = ['inline_keyboard' => []];
+
         $check = Check::with('botUser')->find($checkId);
         if (!$check) {
-            $this->editMessageText($bot, $chatId, $messageId, "❌ Чек не найден.");
+            $this->editAdminNotificationMessage($bot, $chatId, $messageId, "❌ Чек не найден.", $emptyKeyboard, $isCaption);
             return;
         }
 
         if ($check->review_status !== 'pending') {
-            $this->editMessageText($bot, $chatId, $messageId, "⚠️ Этот чек уже был обработан.");
+            $this->editAdminNotificationMessage($bot, $chatId, $messageId, "⚠️ Этот чек уже был обработан.", $emptyKeyboard, $isCaption);
             return;
         }
 
         $amount = $check->admin_edited_amount ?? $check->amount;
         if (!$amount || $amount < $settings->slot_price) {
-            $this->editMessageText($bot, $chatId, $messageId, "❌ Сумма ({$amount} ₽) меньше стоимости одного места ({$settings->slot_price} ₽).\n\nИспользуйте админ-панель для редактирования суммы.");
+            $this->editAdminNotificationMessage($bot, $chatId, $messageId, "❌ Сумма ({$amount} ₽) меньше стоимости одного места ({$settings->slot_price} ₽).\n\nИспользуйте админ-панель для редактирования суммы.", $emptyKeyboard, $isCaption);
             return;
         }
 
@@ -3288,7 +3333,7 @@ PYTHON;
         $availableSlots = $settings->getAvailableSlotsCount();
 
         if ($ticketsCount > $availableSlots) {
-            $this->editMessageText($bot, $chatId, $messageId, "❌ Недостаточно мест. Доступно: {$availableSlots}, требуется: {$ticketsCount}");
+            $this->editAdminNotificationMessage($bot, $chatId, $messageId, "❌ Недостаточно мест. Доступно: {$availableSlots}, требуется: {$ticketsCount}", $emptyKeyboard, $isCaption);
             return;
         }
 
@@ -3327,8 +3372,8 @@ PYTHON;
             $this->sendMessage($bot, $check->botUser->telegram_user_id, $userMsg);
         }
 
-        // Update admin message
-        $this->editMessageText($bot, $chatId, $messageId, "✅ Чек #{$checkId} одобрен!\n\nВыдано номерков: " . count($issuedTickets) . "\nНомера: " . implode(', ', $issuedTickets));
+        // Обновляем уведомление: показываем результат и убираем кнопки
+        $this->editAdminNotificationMessage($bot, $chatId, $messageId, "✅ Чек #{$checkId} одобрен!\n\nВыдано номерков: " . count($issuedTickets) . "\nНомера: " . implode(', ', $issuedTickets), ['inline_keyboard' => []], $isCaption);
 
         // Log action
         \App\Models\AdminActionLog::create([
@@ -3344,21 +3389,23 @@ PYTHON;
     /**
      * Handle admin reject check via Telegram
      */
-    private function handleAdminRejectCheck(TelegramBot $bot, BotUser $admin, int $chatId, int $messageId, int $checkId, BotSettings $settings): void
+    private function handleAdminRejectCheck(TelegramBot $bot, BotUser $admin, int $chatId, int $messageId, int $checkId, BotSettings $settings, bool $isCaption = false): void
     {
         if (!$admin->isAdmin()) {
             $this->sendMessage($bot, $chatId, "❌ У вас нет прав для этого действия.");
             return;
         }
 
+        $emptyKeyboard = ['inline_keyboard' => []];
+
         $check = Check::with('botUser')->find($checkId);
         if (!$check) {
-            $this->editMessageText($bot, $chatId, $messageId, "❌ Чек не найден.");
+            $this->editAdminNotificationMessage($bot, $chatId, $messageId, "❌ Чек не найден.", $emptyKeyboard, $isCaption);
             return;
         }
 
         if ($check->review_status !== 'pending') {
-            $this->editMessageText($bot, $chatId, $messageId, "⚠️ Этот чек уже был обработан.");
+            $this->editAdminNotificationMessage($bot, $chatId, $messageId, "⚠️ Этот чек уже был обработан.", $emptyKeyboard, $isCaption);
             return;
         }
 
@@ -3380,8 +3427,8 @@ PYTHON;
             $this->sendMessageWithKeyboard($bot, $check->botUser->telegram_user_id, $userMsg, $keyboard);
         }
 
-        // Update admin message
-        $this->editMessageText($bot, $chatId, $messageId, "❌ Чек #{$checkId} отклонён.");
+        // Обновляем уведомление: показываем результат и убираем кнопки
+        $this->editAdminNotificationMessage($bot, $chatId, $messageId, "❌ Чек #{$checkId} отклонён.", $emptyKeyboard, $isCaption);
 
         // Log action
         \App\Models\AdminActionLog::create([
@@ -3391,6 +3438,22 @@ PYTHON;
             'target_type' => 'check',
             'target_id' => $checkId,
         ]);
+    }
+
+    /**
+     * Обработка кнопки «Редактировать» — показываем ссылку на чек в админ-панели
+     */
+    private function handleAdminEditCheck(TelegramBot $bot, int $chatId, int $messageId, int $checkId, bool $isCaption = false): void
+    {
+        $baseUrl = rtrim(config('app.url', 'https://auto.siteaccess.ru'), '/');
+        $url = $baseUrl . '/checks/' . $checkId;
+        $text = "✏️ Редактирование чека #{$checkId}\n\nОткройте ссылку в админ-панели:\n{$url}";
+        $keyboard = [
+            'inline_keyboard' => [
+                [['text' => '🔗 Открыть чек', 'url' => $url]],
+            ],
+        ];
+        $this->editAdminNotificationMessage($bot, $chatId, $messageId, $text, $keyboard, $isCaption);
     }
 
     /**
