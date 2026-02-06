@@ -216,21 +216,25 @@ class TelegramWebhookController extends Controller
             return;
         }
 
-        // Handle photo (check image)
+        // Принимаем только PDF — фото отклоняем
         if ($photo) {
-            $this->handlePhoto($bot, $chatId, $photo, $userData);
+            $this->sendMessage($bot, $chatId, 'Принимаются только PDF-файлы. Загрузите чек в формате PDF.');
             return;
         }
 
-        // Handle document (check image file or PDF)
-        if ($document && ($this->isImageDocument($document) || $this->isPdfDocument($document))) {
-            $this->handleDocument($bot, $chatId, $document, $userData);
+        // Документ: только PDF, изображения отклоняем
+        if ($document) {
+            if ($this->isPdfDocument($document)) {
+                $this->handleDocument($bot, $chatId, $document, $userData);
+            } else {
+                $this->sendMessage($bot, $chatId, 'Принимаются только PDF-файлы. Загрузите чек в формате PDF.');
+            }
             return;
         }
 
         // Handle other messages
         if ($text) {
-            $this->sendMessage($bot, $chatId, 'Пожалуйста, отправьте фото чека для обработки.');
+            $this->sendMessage($bot, $chatId, 'Пожалуйста, отправьте чек в формате PDF.');
         }
     }
     
@@ -415,11 +419,13 @@ class TelegramWebhookController extends Controller
                 
             case BotUser::STATE_SHOW_QR:
             case BotUser::STATE_WAIT_CHECK:
-                // Handle check submission
-                if ($photo || ($document && ($this->isImageDocument($document) || $this->isPdfDocument($document)))) {
+                // Принимаем только PDF
+                if ($photo || ($document && !$this->isPdfDocument($document))) {
+                    $this->sendMessage($bot, $chatId, 'Принимаются только PDF-файлы. Загрузите чек в формате PDF.');
+                } elseif ($document && $this->isPdfDocument($document)) {
                     $this->handleRaffleCheck($bot, $botUser, $chatId, $message, $settings);
-                } else if ($text) {
-                    $this->sendMessage($bot, $chatId, "📤 Отправьте фото чека или PDF-файл для подтверждения оплаты.");
+                } elseif ($text) {
+                    $this->sendMessage($bot, $chatId, '📤 Отправьте чек в формате PDF для подтверждения оплаты.');
                 }
                 break;
                 
@@ -482,7 +488,7 @@ class TelegramWebhookController extends Controller
             $fullPath = storage_path('app/public/' . $qrPath);
         }
 
-        $msg = $settings->msg_show_qr ?? "Оплатите {price} руб по QR-коду.\n\nНазначение платежа: {payment_description}\n\nПосле оплаты отправьте фото или PDF чека.";
+        $msg = $settings->msg_show_qr ?? "Оплатите {price} руб по QR-коду.\n\nНазначение платежа: {payment_description}\n\nПосле оплаты отправьте чек в формате PDF.";
         $msg = str_replace('{price}', number_format($settings->slot_price, 0, ',', ' '), $msg);
         $msg = str_replace('{payment_description}', $settings->payment_description ?? 'Оплата наклейки', $msg);
 
@@ -528,7 +534,13 @@ class TelegramWebhookController extends Controller
     {
         $photo = $message['photo'] ?? null;
         $document = $message['document'] ?? null;
-        
+
+        // Принимаем только PDF
+        if ($photo || ($document && !$this->isPdfDocument($document))) {
+            $this->sendMessage($bot, $chatId, 'Принимаются только PDF-файлы. Загрузите чек в формате PDF.');
+            return;
+        }
+
         $this->sendMessage($bot, $chatId, '⏳ Обрабатываю чек...');
         
         $userData = [
@@ -905,7 +917,7 @@ class TelegramWebhookController extends Controller
                 Storage::disk('local')->delete($pf);
             }
             
-            $this->sendMessage($bot, $chatId, '❌ Не удалось распознать текст на чеке. Убедитесь, что фото четкое и текст хорошо виден. Попробуйте отправить другое фото или PDF.');
+            $this->sendMessage($bot, $chatId, '❌ Не удалось распознать текст на чеке. Убедитесь, что PDF читаемый и текст хорошо виден. Попробуйте отправить другой PDF-файл.');
         } catch (\Exception $e) {
             Log::error('Error processing photo: ' . $e->getMessage(), [
                 'trace' => $e->getTraceAsString(),
@@ -965,7 +977,7 @@ class TelegramWebhookController extends Controller
                 $this->sendCheckResult($bot, $chatId, $checkData);
             } else {
                 $this->saveCheckToDatabase($checkRecord, null, $filePath, $fileSize, 'failed');
-                $this->sendMessage($bot, $chatId, '❌ Не удалось распознать текст на чеке. Убедитесь, что фото четкое и текст хорошо виден. Попробуйте отправить другое фото или PDF.');
+                $this->sendMessage($bot, $chatId, '❌ Не удалось распознать текст на чеке. Убедитесь, что PDF читаемый и текст хорошо виден. Попробуйте отправить другой PDF-файл.');
                 Storage::disk('local')->delete($filePath);
             }
         } catch (\Exception $e) {
@@ -3122,7 +3134,7 @@ PYTHON;
                 
             case 'send_check_again':
                 $botUser->update(['fsm_state' => BotUser::STATE_WAIT_CHECK]);
-                $msg = $botSettings->msg_wait_check ?? "📤 Отправьте фото чека или PDF-файл для подтверждения оплаты.";
+                $msg = $botSettings->msg_wait_check ?? "📤 Отправьте чек в формате PDF для подтверждения оплаты.";
                 $keyboard = [
                     'inline_keyboard' => [
                         [['text' => '❌ Отмена', 'callback_data' => 'cancel']]

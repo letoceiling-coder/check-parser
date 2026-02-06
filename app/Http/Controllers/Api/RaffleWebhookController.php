@@ -186,11 +186,14 @@ class RaffleWebhookController extends Controller
 
             case BotFSM::STATE_WAIT_CHECK:
             case BotFSM::STATE_REJECTED:
-                // Ожидаем чек (PDF или фото)
+                // Принимаем только PDF
                 if ($document && $this->isPdfDocument($document)) {
                     $this->handleCheckDocument($document);
-                } elseif ($photo) {
-                    $this->handleCheckPhoto($photo);
+                } elseif ($photo || $document) {
+                    $this->telegram->sendMessage(
+                        $this->botUser->telegram_user_id,
+                        'Принимаются только PDF-файлы. Загрузите чек в формате PDF.'
+                    );
                 } else {
                     $this->sendStateMessage();
                 }
