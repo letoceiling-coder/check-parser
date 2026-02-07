@@ -21,14 +21,23 @@ class ReceiptParser
     private ?bool $amountFoundByKeyword = null;
 
     /** Ключевые слова для поиска сумм (порядок приоритета) */
-    private const AMOUNT_KEYWORDS = ['итого', 'сумма', 'всего', 'оплачено', 'списано', 'к оплате', 'исполнено', 'сумма перевода'];
-
-    /** Слова рядом с которыми число НЕ считается суммой */
-    private const BAD_AMOUNT_CONTEXT = [
-        'комиссия', 'комисс', 'счет', 'счёт', 'телефон', 'идентификатор',
-        '****', 'инн', 'бик', 'кпп', 'остаток', 'авторизац',
-        'в т.ч.', 'в т ч', 'включая комиссию', 'в том числе', 'сбор за', 'платеж за услуг',
+    private const AMOUNT_KEYWORDS = [
+        'итого', 'сумма', 'всего', 'оплачено', 'списано', 'к оплате', 'исполнено',
+        'сумма перевода', 'сумма операции', 'перевод на карту',
     ];
+
+    /** Слова в ~25 символов ПЕРЕД числом — это число НЕ сумма (комиссия, остаток и т.д.) */
+    private const BAD_AMOUNT_PREFIX = [
+        'комиссия', 'комисс', 'сбор за', 'сбор:', 'остаток', 'в т.ч.', 'в т ч',
+        'включая комиссию', 'в том числе', 'платеж за услуг', 'счет', 'счёт',
+    ];
+
+    /** Слова в полном контексте — отбрасываем совпадение (номера карт, ID) */
+    private const BAD_AMOUNT_CONTEXT = [
+        'идентификатор', 'инн', 'бик', 'кпп', 'авторизац',
+    ];
+
+    private const PREFIX_CHECK_LEN = 28;
 
     /** Паттерны дат (DD.MM.YYYY, DD/MM/YYYY, DD-MM-YYYY, 2-значный год) */
     private const DATE_PATTERNS = [
@@ -197,15 +206,18 @@ class ReceiptParser
         $keywordPriority = array_flip(self::AMOUNT_KEYWORDS);
         $this->amountFoundByKeyword = false;
 
-        // Ищем пары "ключевое_слово" + число в пределах 60 символов (в т.ч. через перенос)
+        // Ищем пары "ключевое_слово" + число в пределах 80 символов
         $textOneLine = preg_replace('/\s+/u', ' ', $this->text);
         foreach (self::AMOUNT_KEYWORDS as $kw) {
-            $pattern = '/' . preg_quote($kw, '/') . '[^\d]{0,60}' . self::AMOUNT_REGEX . '\s*[₽РрPpруб\.]?/ui';
-            if (preg_match_all($pattern, $textOneLine, $m)) {
-                foreach ($m[1] as $i => $numStr) {
-                    $context = mb_strtolower(is_array($m[0]) ? $m[0][$i] : $m[0], 'UTF-8');
+            $pattern = '/' . preg_quote($kw, '/') . '[^\d]{0,80}' . self::AMOUNT_REGEX . '\s*[₽РрPpруб\.р]?/ui';
+            if (preg_match_all($pattern, $textOneLine, $m, PREG_SET_ORDER | PREG_OFFSET_CAPTURE)) {
+                foreach ($m as $match) {
+                    $numStr = $match[1][0];
+                    $numPos = $match[1][1];
+                    $fullMatch = $match[0][0];
+                    $context = mb_strtolower($fullMatch, 'UTF-8');
                     if ($this->hasAnyKeyword($context, self::BAD_AMOUNT_CONTEXT)) continue;
-                    if (str_contains($context, '****')) continue;
+                    if ($this->hasBadPrefix($textOneLine, $numPos, $numStr)) continue;
 
                     $val = $this->normalizeAndValidateAmount($numStr);
                     if ($val !== null) {
@@ -220,7 +232,7 @@ class ReceiptParser
             }
         }
 
-        // Дополнительно: по строкам (для случаев когда ключ и число на одной строке)
+        // По строкам (перевод на карту, сумма — когда ключ и число в одной строке)
         $lines = preg_split('/\r\n|\r|\n/', $this->text);
         foreach ($lines as $line) {
             $lineLower = mb_strtolower($line, 'UTF-8');
@@ -233,11 +245,14 @@ class ReceiptParser
             }
             if ($usedKeyword === null) continue;
             if ($this->hasAnyKeyword($lineLower, self::BAD_AMOUNT_CONTEXT)) continue;
-            if (str_contains($lineLower, '****')) continue;
 
-            $pattern = '/' . self::AMOUNT_REGEX . '\s*[₽РрPpруб\.]?/ui';
-            if (preg_match_all($pattern, $line, $m)) {
-                foreach ($m[1] as $numStr) {
+            $pattern = '/' . self::AMOUNT_REGEX . '\s*[₽РрPpруб\.р]?/ui';
+            if (preg_match_all($pattern, $line, $m, PREG_SET_ORDER | PREG_OFFSET_CAPTURE)) {
+                foreach ($m as $match) {
+                    $numStr = $match[1][0];
+                    $numPos = $match[1][1];
+                    if ($this->hasBadPrefix($line, $numPos, $numStr)) continue;
+
                     $val = $this->normalizeAndValidateAmount($numStr);
                     if ($val !== null) {
                         $this->amountFoundByKeyword = true;
@@ -256,9 +271,8 @@ class ReceiptParser
         }
 
         // Если в документе есть комиссия — приоритет "сумма перевода"/"оплачено"/"списано" над "итого"/"всего"
-        // (итого часто включает комиссию: 10000 + 150 = 10150)
         $hasCommission = str_contains($this->textLower, 'комиссия') || str_contains($this->textLower, 'комисс');
-        $baseKeywords = ['сумма перевода', 'оплачено', 'списано', 'сумма операции'];
+        $baseKeywords = ['сумма перевода', 'оплачено', 'списано', 'сумма операции', 'перевод на карту'];
         $totalKeywords = ['итого', 'всего'];
 
         usort($foundByKeyword, function ($a, $b) use ($hasCommission, $baseKeywords, $totalKeywords, $keywordPriority) {
@@ -267,15 +281,23 @@ class ReceiptParser
                 $bBase = in_array($b['keyword'], $baseKeywords);
                 $aTotal = in_array($a['keyword'], $totalKeywords);
                 $bTotal = in_array($b['keyword'], $totalKeywords);
-                if ($aBase && $bTotal) return -1;  // a (base) выше
-                if ($aTotal && $bBase) return 1;   // b (base) выше
+                if ($aBase && $bTotal) return -1;
+                if ($aTotal && $bBase) return 1;
             }
             $p = $a['priority'] <=> $b['priority'];
             if ($p !== 0) return $p;
             return $b['amount'] <=> $a['amount'];
         });
 
-        return $foundByKeyword[0]['amount'];
+        $best = $foundByKeyword[0];
+        $uniqueAmounts = array_unique(array_map(fn($x) => $x['amount'], $foundByKeyword));
+
+        // Отклонение: если 4+ разных сумм и выбранная — наименьшая (вероятно комиссия/остаток)
+        if (count($uniqueAmounts) >= 4 && $best['amount'] === min($uniqueAmounts)) {
+            return null;
+        }
+
+        return $best['amount'];
     }
 
     private function normalizeAndValidateAmount(string $numStr): ?float
@@ -350,5 +372,14 @@ class ReceiptParser
             if (str_contains($text, $kw)) return true;
         }
         return false;
+    }
+
+    /** Число в плохом контексте (комиссия, остаток и т.д.) — в ~25 символах перед числом */
+    private function hasBadPrefix(string $text, int $numPos, string $numStr): bool
+    {
+        $start = max(0, $numPos - self::PREFIX_CHECK_LEN);
+        $prefix = mb_substr($text, $start, $numPos - $start, 'UTF-8');
+        $prefixLower = mb_strtolower($prefix, 'UTF-8');
+        return $this->hasAnyKeyword($prefixLower, self::BAD_AMOUNT_PREFIX);
     }
 }
