@@ -98,6 +98,20 @@ class AnalyzePdfsCommand extends Command
     {
         $fileNameLower = mb_strtolower($fileName, 'UTF-8');
 
+        // 1. Сначала проверяем имя файла — приоритет над текстом (ozonbank_document_*, Документ по операции_*)
+        foreach ($order as $bankId) {
+            if ($bankId === 'default') {
+                continue;
+            }
+            $hints = $filenameHints[$bankId] ?? [];
+            foreach ($hints as $hint) {
+                if (str_contains($fileNameLower, mb_strtolower($hint, 'UTF-8'))) {
+                    return $bankId;
+                }
+            }
+        }
+
+        // 2. По ключевым словам в тексте
         foreach ($order as $bankId) {
             if ($bankId === 'default') {
                 continue;
@@ -106,12 +120,6 @@ class AnalyzePdfsCommand extends Command
             $keywords = $config['detect_keywords'] ?? [];
             foreach ($keywords as $kw) {
                 if (str_contains($textLower, mb_strtolower($kw, 'UTF-8'))) {
-                    return $bankId;
-                }
-            }
-            $hints = $filenameHints[$bankId] ?? [];
-            foreach ($hints as $hint) {
-                if (str_contains($fileNameLower, $hint)) {
                     return $bankId;
                 }
             }
