@@ -601,9 +601,12 @@ class TelegramWebhookController extends Controller
                 'file_hash' => $fileHash,
                 'bot_id' => $bot->id,
             ]);
-            
+
+            $settings = BotSettings::getOrCreate($bot->id);
+            $parserMethod = $settings->receipt_parser_method ?? BotSettings::PARSER_LEGACY;
+
             // Process with OCR
-            $checkData = $this->processCheckWithOCR($filePath, $isPdf);
+            $checkData = $this->processCheckWithOCR($filePath, $isPdf, $parserMethod);
             
             // 2. Извлекаем ID операции из текста чека
             $operationId = null;
