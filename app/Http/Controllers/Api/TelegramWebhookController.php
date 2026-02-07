@@ -2585,6 +2585,23 @@ PYTHON;
                 'use_enhanced' => $useEnhanced,
                 'text_preview' => substr($text, 0, 500)
             ]);
+
+            // Улучшенный режим: ReceiptParser (дата по контексту, сумма только по ключевым словам, confidence)
+            if ($useEnhanced) {
+                $parser = new \App\Services\ReceiptParser($text);
+                $result = $parser->parse();
+                if (!empty($result['amount']) && !empty($result['date'])) {
+                    Log::info('ReceiptParser: parsed successfully', [
+                        'amount' => $result['amount'],
+                        'date' => $result['date'],
+                        'confidence' => $result['parsing_confidence'] ?? null,
+                    ]);
+                    return $result;
+                }
+                if (!empty($result['amount']) || !empty($result['date'])) {
+                    Log::info('ReceiptParser: partial result, falling back to legacy', $result);
+                }
+            }
             
             // Store original text for debugging
             $originalText = $text;

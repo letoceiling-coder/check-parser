@@ -2,6 +2,7 @@
 
 namespace App\Console\Commands;
 
+use App\Services\ReceiptParser;
 use App\Services\ReceiptTextPreprocessor;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Config;
@@ -61,9 +62,15 @@ class AnalyzePdfsCommand extends Command
 
             $bank = $this->detectBank($textProcessed, $fileName, $banks, $detectionOrder, $filenameHints);
 
+            $parser = new ReceiptParser($text);
+            $parsed = $parser->parse();
+
             $resultItem = [
                 'file' => $fileName,
                 'bank' => $bank,
+                'amount' => $parsed['amount'] ?? null,
+                'date' => $parsed['date'] ?? null,
+                'confidence' => $parsed['parsing_confidence'] ?? null,
                 'text_preview' => mb_substr($textProcessed, 0, 800),
                 'text_length' => mb_strlen($textProcessed),
             ];
@@ -74,6 +81,9 @@ class AnalyzePdfsCommand extends Command
 
             $this->line("  [{$fileName}]");
             $this->line("    Банк: " . ($banks[$bank]['name'] ?? $bank));
+            $this->line("    Сумма: " . ($parsed['amount'] ? number_format($parsed['amount'], 2) . ' ₽' : '—'));
+            $this->line("    Дата: " . ($parsed['date'] ?? '—'));
+            $this->line("    Confidence: " . ($parsed['parsing_confidence'] ?? '—'));
             $this->line("    Текст: " . mb_strlen($textProcessed) . " символов");
             $this->line("    Превью: " . mb_substr(preg_replace('/\s+/', ' ', $textProcessed), 0, 150) . '...');
             $this->newLine();
