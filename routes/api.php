@@ -44,6 +44,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/checks/stats', [\App\Http\Controllers\Api\CheckController::class, 'stats']);
     Route::get('/checks/{id}', [\App\Http\Controllers\Api\CheckController::class, 'show']);
     Route::put('/checks/{id}', [\App\Http\Controllers\Api\CheckController::class, 'update']);
+    Route::post('/checks/{id}/reparse', [\App\Http\Controllers\Api\CheckController::class, 'reparse']);
     Route::delete('/checks/{id}', [\App\Http\Controllers\Api\CheckController::class, 'destroy']);
     Route::put('/checks/{id}/approve', [\App\Http\Controllers\Api\CheckController::class, 'approve']);
     Route::put('/checks/{id}/reject', [\App\Http\Controllers\Api\CheckController::class, 'reject']);

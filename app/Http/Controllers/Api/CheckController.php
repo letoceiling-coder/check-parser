@@ -8,6 +8,7 @@ use App\Models\Ticket;
 use App\Models\BotSettings;
 use App\Models\TelegramBot;
 use App\Models\AdminActionLog;
+use App\Services\ReceiptParser;
 use App\Services\Telegram\TelegramService;
 use App\Services\Telegram\FSM\BotFSM;
 use Illuminate\Http\Request;
@@ -86,6 +87,85 @@ class CheckController extends Controller
             'message' => 'Чек обновлен',
             'check' => $check->fresh()
         ]);
+    }
+
+    /**
+     * Перераспознать чек (для PDF: pdftotext + ReceiptParser).
+     * Помогает когда первоначально использовался Tesseract и результат был неточным.
+     */
+    public function reparse(int $id): JsonResponse
+    {
+        $check = Check::findOrFail($id);
+
+        if (!$check->file_path || !Storage::disk('local')->exists($check->file_path)) {
+            return response()->json(['success' => false, 'message' => 'Файл не найден'], 404);
+        }
+
+        if ($check->file_type !== 'pdf') {
+            return response()->json(['success' => false, 'message' => 'Перераспознавание поддерживается только для PDF'], 400);
+        }
+
+        $fullPath = Storage::disk('local')->path($check->file_path);
+        $text = $this->extractTextFromPdf($fullPath);
+
+        if (!$text || mb_strlen($text, 'UTF-8') < 50) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Не удалось извлечь текст (PDF может быть скан-копией, pdftotext нужен на сервере)',
+            ], 422);
+        }
+
+        $parser = new ReceiptParser($text);
+        $parsed = $parser->parse();
+
+        if (empty($parsed['amount']) && empty($parsed['date'])) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Не удалось определить сумму и дату из текста',
+                'text_preview' => mb_substr($text, 0, 300),
+            ], 422);
+        }
+
+        $check->amount = $parsed['amount'] ?? $parsed['sum'] ?? $check->amount;
+        if (!empty($parsed['date'])) {
+            $check->check_date = $parsed['date'];
+        }
+        $check->amount_found = !empty($parsed['amount']);
+        $check->date_found = !empty($parsed['date']);
+        $check->ocr_method = 'pdftotext_reparse';
+        $check->raw_text = mb_substr($text, 0, 5000);
+        $check->text_length = mb_strlen($text, 'UTF-8');
+        $check->readable_ratio = 1.0;
+        $check->parsing_confidence = $parsed['parsing_confidence'] ?? null;
+        $check->bank_code = $parsed['bank_code'] ?? null;
+        $check->corrected_amount = null;
+        $check->corrected_date = null;
+        $check->status = ($check->amount_found && $check->date_found) ? 'success' : 'partial';
+        $check->needs_review = ($check->parsing_confidence !== null && (float) $check->parsing_confidence < 0.7);
+        $check->save();
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Чек перераспознан',
+            'check' => $check->fresh(),
+        ]);
+    }
+
+    private function extractTextFromPdf(string $pdfPath): ?string
+    {
+        if (!file_exists($pdfPath) || !is_readable($pdfPath)) {
+            return null;
+        }
+        $fullPath = realpath($pdfPath);
+        $escaped = escapeshellarg($fullPath);
+        $command = 'pdftotext -layout -enc UTF-8 ' . $escaped . ' - 2>' . (PHP_OS_FAMILY === 'Windows' ? 'NUL' : '/dev/null');
+        try {
+            $output = @shell_exec($command);
+            $text = $output ? trim($output) : '';
+            return $text !== '' ? $text : null;
+        } catch (\Throwable $e) {
+            return null;
+        }
     }
 
     /**

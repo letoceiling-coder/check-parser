@@ -18,6 +18,8 @@ function CheckDetails() {
     admin_notes: '',
   });
   const [saving, setSaving] = useState(false);
+  const [reparsing, setReparsing] = useState(false);
+  const [reparseError, setReparseError] = useState(null);
   const [fileUrl, setFileUrl] = useState(null);
 
   const fetchCheck = useCallback(async () => {
@@ -90,6 +92,37 @@ function CheckDetails() {
     }
   };
 
+  const handleReparse = async () => {
+    if (!window.confirm('Перераспознать чек через pdftotext? Это может исправить сумму и дату.')) return;
+    setReparsing(true);
+    setReparseError(null);
+    const token = localStorage.getItem('token');
+    try {
+      const response = await fetch(`${API_URL}/api/checks/${id}/reparse`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Accept': 'application/json',
+        },
+      });
+      const data = await response.json();
+      if (response.ok && data.check) {
+        setCheck(data.check);
+        setFormData({
+          corrected_amount: data.check.corrected_amount || '',
+          corrected_date: data.check.corrected_date ? data.check.corrected_date.slice(0, 16) : '',
+          admin_notes: data.check.admin_notes || '',
+        });
+      } else {
+        setReparseError(data.message || 'Ошибка перераспознавания');
+      }
+    } catch (error) {
+      setReparseError('Ошибка сети: ' + error.message);
+    } finally {
+      setReparsing(false);
+    }
+  };
+
   const handleDelete = async () => {
     if (!window.confirm('Удалить этот чек?')) return;
 
@@ -152,6 +185,7 @@ function CheckDetails() {
   const getOcrMethodLabel = (method) => {
     const labels = {
       pdftotext: 'PDF (текст, без OCR)',
+      pdftotext_reparse: 'PDF (перераспознано)',
       extractTextWithTesseract: 'Tesseract (локальный)',
       extractTextWithRemoteTesseract: 'Tesseract (VPS)',
       extractTextWithOCRspace: 'OCR.space',
@@ -200,7 +234,7 @@ function CheckDetails() {
             )}
           </span>
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2 items-center">
           {!editing && (
             <button
               onClick={() => setEditing(true)}
@@ -209,12 +243,25 @@ function CheckDetails() {
               ✏️ Редактировать
             </button>
           )}
+          {check.file_type === 'pdf' && (
+            <button
+              onClick={handleReparse}
+              disabled={reparsing}
+              className="px-4 py-2 bg-purple-500 text-white rounded-lg hover:bg-purple-600 transition disabled:opacity-50"
+              title="Перераспознать через pdftotext (может исправить сумму)"
+            >
+              {reparsing ? '⏳ Перераспознавание...' : '🔄 Перераспознать'}
+            </button>
+          )}
           <button
             onClick={handleDelete}
             className="px-4 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600 transition"
           >
             🗑️ Удалить
           </button>
+          {reparseError && (
+            <span className="text-red-600 text-sm">{reparseError}</span>
+          )}
         </div>
       </div>
 
