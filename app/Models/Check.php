@@ -25,6 +25,7 @@ class Check extends Model
         'original_check_id',
         'amount',
         'currency',
+        'bank_code',
         'check_date',
         'ocr_method',
         'raw_text',
@@ -250,6 +251,14 @@ class Check extends Model
     public function scopeForBot($query, int $telegramBotId)
     {
         return $query->where('telegram_bot_id', $telegramBotId);
+    }
+
+    /**
+     * Фильтр по банку (для будущего расширения: банк-специфичная логика, отчёты).
+     */
+    public function scopeByBank($query, string $bankCode)
+    {
+        return $query->where('bank_code', $bankCode);
     }
 
     // ==========================================

@@ -25,8 +25,9 @@ class ReceiptParser
 
     /** Слова рядом с которыми число НЕ считается суммой */
     private const BAD_AMOUNT_CONTEXT = [
-        'комиссия', 'счет', 'счёт', 'телефон', 'идентификатор',
+        'комиссия', 'комисс', 'счет', 'счёт', 'телефон', 'идентификатор',
         '****', 'инн', 'бик', 'кпп', 'остаток', 'авторизац',
+        'в т.ч.', 'в т ч', 'включая комиссию', 'в том числе', 'сбор за', 'платеж за услуг',
     ];
 
     /** Паттерны дат (DD.MM.YYYY, DD/MM/YYYY, DD-MM-YYYY, 2-значный год) */
@@ -254,8 +255,21 @@ class ReceiptParser
             return null;
         }
 
-        // Приоритет: итого > сумма > всего > оплачено/списано > самая большая
-        usort($foundByKeyword, function ($a, $b) {
+        // Если в документе есть комиссия — приоритет "сумма перевода"/"оплачено"/"списано" над "итого"/"всего"
+        // (итого часто включает комиссию: 10000 + 150 = 10150)
+        $hasCommission = str_contains($this->textLower, 'комиссия') || str_contains($this->textLower, 'комисс');
+        $baseKeywords = ['сумма перевода', 'оплачено', 'списано', 'сумма операции'];
+        $totalKeywords = ['итого', 'всего'];
+
+        usort($foundByKeyword, function ($a, $b) use ($hasCommission, $baseKeywords, $totalKeywords, $keywordPriority) {
+            if ($hasCommission) {
+                $aBase = in_array($a['keyword'], $baseKeywords);
+                $bBase = in_array($b['keyword'], $baseKeywords);
+                $aTotal = in_array($a['keyword'], $totalKeywords);
+                $bTotal = in_array($b['keyword'], $totalKeywords);
+                if ($aBase && $bTotal) return -1;  // a (base) выше
+                if ($aTotal && $bBase) return 1;   // b (base) выше
+            }
             $p = $a['priority'] <=> $b['priority'];
             if ($p !== 0) return $p;
             return $b['amount'] <=> $a['amount'];
@@ -281,18 +295,23 @@ class ReceiptParser
     }
 
     /**
-     * 5. Определение банка.
+     * 5. Определение банка (bank_code для расширения логики по банкам).
      */
     private function extractBank(): ?string
     {
-        if (str_contains($this->textLower, 'сбербанк') || str_contains($this->textLower, 'сбер ')) {
-            return 'sber';
-        }
-        if (str_contains($this->textLower, 'тинькофф') || str_contains($this->textLower, 'т-банк')) {
-            return 'tinkoff';
-        }
-        if (str_contains($this->textLower, 'альфа') || str_contains($this->textLower, 'alfabank')) {
-            return 'alfabank';
+        $banks = config('bank_checks.banks', []);
+        $order = config('bank_checks.detection_order', ['sber', 'tinkoff', 'alfabank', 'default']);
+
+        foreach ($order as $code) {
+            if ($code === 'default') continue;
+            $bank = $banks[$code] ?? null;
+            if (!$bank || empty($bank['detect_keywords'])) continue;
+
+            foreach ($bank['detect_keywords'] as $kw) {
+                if (str_contains($this->textLower, mb_strtolower($kw, 'UTF-8'))) {
+                    return $code;
+                }
+            }
         }
         return null;
     }
