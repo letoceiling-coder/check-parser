@@ -293,6 +293,12 @@ class ReceiptParser
             return null;
         }
 
+        // При комиссии в документе — отбросить малые суммы (< 300), если есть сумма >= 1000
+        $foundByKeyword = $this->filterSmallCommissionAmounts($foundByKeyword);
+        if (empty($foundByKeyword)) {
+            return null;
+        }
+
         // Если в документе есть комиссия — приоритет "сумма перевода"/"оплачено"/"списано" над "итого"/"всего"
         $hasCommission = str_contains($this->textLower, 'комиссия') || str_contains($this->textLower, 'комисс');
         $baseKeywords = ['сумма перевода', 'оплачено', 'списано', 'сумма операции', 'перевод на карту'];
@@ -419,5 +425,17 @@ class ReceiptParser
         $prefix = mb_substr($text, $start, $numPos - $start, 'UTF-8');
         $prefixLower = mb_strtolower($prefix, 'UTF-8');
         return $this->hasAnyKeyword($prefixLower, self::BAD_AMOUNT_PREFIX);
+    }
+
+    /** При комиссии в документе отбросить малые суммы (< 300), если есть сумма >= 1000 */
+    private function filterSmallCommissionAmounts(array $foundByKeyword): array
+    {
+        $hasCommission = str_contains($this->textLower, 'комиссия') || str_contains($this->textLower, 'комисс');
+        if (!$hasCommission) return $foundByKeyword;
+
+        $maxAmount = max(array_column($foundByKeyword, 'amount'));
+        if ($maxAmount < 1000) return $foundByKeyword;
+
+        return array_values(array_filter($foundByKeyword, fn($x) => $x['amount'] >= 300 || $x['amount'] === $maxAmount));
     }
 }
