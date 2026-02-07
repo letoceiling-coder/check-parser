@@ -32,6 +32,9 @@ class ReceiptParser
         'включая комиссию', 'в том числе', 'платеж за услуг', 'счет', 'счёт',
     ];
 
+    /** Число — часть номера карты, если в 15 символах после него есть **** */
+    private const CARD_LOOKALIKE_SUFFIX_LEN = 15;
+
     /** Слова в полном контексте — отбрасываем совпадение (номера карт, ID) */
     private const BAD_AMOUNT_CONTEXT = [
         'идентификатор', 'инн', 'бик', 'кпп', 'авторизац',
@@ -217,15 +220,21 @@ class ReceiptParser
                     $fullMatch = $match[0][0];
                     $context = mb_strtolower($fullMatch, 'UTF-8');
                     if ($this->hasAnyKeyword($context, self::BAD_AMOUNT_CONTEXT)) continue;
+                    if (in_array($kw, ['итого', 'всего']) && (str_contains($context, 'комиссия') || str_contains($context, 'в т.ч.') || str_contains($context, 'в т ч'))) {
+                        continue;
+                    }
                     if ($this->hasBadPrefix($textOneLine, $numPos, $numStr)) continue;
+                    if ($this->looksLikeCardNumber($textOneLine, $numPos, $numStr)) continue;
 
                     $val = $this->normalizeAndValidateAmount($numStr);
                     if ($val !== null) {
                         $this->amountFoundByKeyword = true;
+                        $hasCurrency = (bool) preg_match('/[₽Ррруб]\s*$/u', $fullMatch);
                         $foundByKeyword[] = [
                             'amount' => $val,
                             'keyword' => $kw,
                             'priority' => $keywordPriority[$kw] ?? 99,
+                            'hasCurrency' => $hasCurrency,
                         ];
                     }
                 }
@@ -245,21 +254,29 @@ class ReceiptParser
             }
             if ($usedKeyword === null) continue;
             if ($this->hasAnyKeyword($lineLower, self::BAD_AMOUNT_CONTEXT)) continue;
+            // Строка "итого X в т.ч. комиссия Y" — отбрасываем целиком, берём сумму из другой строки
+            $isTotalWithCommission = in_array($usedKeyword, ['итого', 'всего'])
+                && (str_contains($lineLower, 'комиссия') || str_contains($lineLower, 'в т.ч.') || str_contains($lineLower, 'в т ч'));
+            if ($isTotalWithCommission) continue;
 
             $pattern = '/' . self::AMOUNT_REGEX . '\s*[₽РрPpруб\.р]?/ui';
             if (preg_match_all($pattern, $line, $m, PREG_SET_ORDER | PREG_OFFSET_CAPTURE)) {
                 foreach ($m as $match) {
                     $numStr = $match[1][0];
                     $numPos = $match[1][1];
+                    $fullMatch = $match[0][0];
                     if ($this->hasBadPrefix($line, $numPos, $numStr)) continue;
+                    if ($this->looksLikeCardNumber($line, $numPos, $numStr)) continue;
 
                     $val = $this->normalizeAndValidateAmount($numStr);
                     if ($val !== null) {
                         $this->amountFoundByKeyword = true;
+                        $hasCurrency = (bool) preg_match('/[₽Ррруб]\s*$/u', $fullMatch);
                         $foundByKeyword[] = [
                             'amount' => $val,
                             'keyword' => $usedKeyword,
                             'priority' => $keywordPriority[$usedKeyword] ?? 99,
+                            'hasCurrency' => $hasCurrency,
                         ];
                     }
                 }
@@ -275,7 +292,7 @@ class ReceiptParser
         $baseKeywords = ['сумма перевода', 'оплачено', 'списано', 'сумма операции', 'перевод на карту'];
         $totalKeywords = ['итого', 'всего'];
 
-        usort($foundByKeyword, function ($a, $b) use ($hasCommission, $baseKeywords, $totalKeywords, $keywordPriority) {
+        usort($foundByKeyword, function ($a, $b) use ($hasCommission, $baseKeywords, $totalKeywords) {
             if ($hasCommission) {
                 $aBase = in_array($a['keyword'], $baseKeywords);
                 $bBase = in_array($b['keyword'], $baseKeywords);
@@ -284,6 +301,9 @@ class ReceiptParser
                 if ($aBase && $bTotal) return -1;
                 if ($aTotal && $bBase) return 1;
             }
+            $aCur = $a['hasCurrency'] ?? false;
+            $bCur = $b['hasCurrency'] ?? false;
+            if ($bCur !== $aCur) return $bCur ? 1 : -1;
             $p = $a['priority'] <=> $b['priority'];
             if ($p !== 0) return $p;
             return $b['amount'] <=> $a['amount'];
@@ -372,6 +392,14 @@ class ReceiptParser
             if (str_contains($text, $kw)) return true;
         }
         return false;
+    }
+
+    /** Число — часть номера карты (220070******), если после него в 15 символах есть ** */
+    private function looksLikeCardNumber(string $text, int $numPos, string $numStr): bool
+    {
+        $afterStart = $numPos + strlen($numStr);
+        $suffix = mb_substr($text, $afterStart, self::CARD_LOOKALIKE_SUFFIX_LEN, 'UTF-8');
+        return str_contains($suffix, '**');
     }
 
     /** Число в плохом контексте (комиссия, остаток и т.д.) — в ~25 символах перед числом */
