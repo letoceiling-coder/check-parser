@@ -2,6 +2,7 @@
 
 namespace App\Console\Commands;
 
+use App\Services\ReceiptTextPreprocessor;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Config;
 
@@ -9,7 +10,8 @@ class AnalyzePdfsCommand extends Command
 {
     protected $signature = 'checks:analyze-pdfs 
                             {path : Путь к папке с PDF (локальный или на сервере)} 
-                            {--output= : Сохранить отчёт в файл JSON}';
+                            {--output= : Сохранить отчёт в файл JSON}
+                            {--debug : Включить original_text в отчёт для отладки}';
 
     protected $description = 'Извлечь текст из PDF чеков, определить банк и показать для настройки regex';
 
@@ -17,6 +19,7 @@ class AnalyzePdfsCommand extends Command
     {
         $path = $this->argument('path');
         $outputPath = $this->option('output');
+        $debug = $this->option('debug');
 
         if (!is_dir($path)) {
             $this->error("Папка не найдена: {$path}");
@@ -52,20 +55,27 @@ class AnalyzePdfsCommand extends Command
                 continue;
             }
 
-            $textLower = mb_strtolower($text, 'UTF-8');
-            $bank = $this->detectBank($textLower, $fileName, $banks, $detectionOrder, $filenameHints);
+            // Предобработка: регистр, пробелы, OCR-ошибки
+            $preprocessor = new ReceiptTextPreprocessor();
+            $textProcessed = $preprocessor->preprocess($text);
 
-            $results[] = [
+            $bank = $this->detectBank($textProcessed, $fileName, $banks, $detectionOrder, $filenameHints);
+
+            $resultItem = [
                 'file' => $fileName,
                 'bank' => $bank,
-                'text_preview' => mb_substr($text, 0, 800),
-                'text_length' => mb_strlen($text),
+                'text_preview' => mb_substr($textProcessed, 0, 800),
+                'text_length' => mb_strlen($textProcessed),
             ];
+            if ($debug) {
+                $resultItem['original_text'] = $text;
+            }
+            $results[] = $resultItem;
 
             $this->line("  [{$fileName}]");
             $this->line("    Банк: " . ($banks[$bank]['name'] ?? $bank));
-            $this->line("    Текст: " . mb_strlen($text) . " символов");
-            $this->line("    Превью: " . mb_substr(preg_replace('/\s+/', ' ', $text), 0, 150) . '...');
+            $this->line("    Текст: " . mb_strlen($textProcessed) . " символов");
+            $this->line("    Превью: " . mb_substr(preg_replace('/\s+/', ' ', $textProcessed), 0, 150) . '...');
             $this->newLine();
         }
 
