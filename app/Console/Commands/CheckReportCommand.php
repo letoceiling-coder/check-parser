@@ -2,7 +2,9 @@
 
 namespace App\Console\Commands;
 
+use App\Models\BotSettings;
 use App\Models\Check;
+use App\Models\TelegramBot;
 use App\Services\ReceiptParser;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Storage;
@@ -12,11 +14,16 @@ use Illuminate\Support\Facades\Storage;
  */
 class CheckReportCommand extends Command
 {
-    protected $signature = 'checks:report {--id= : ID конкретного чека}';
+    protected $signature = 'checks:report {--id= : ID конкретного чека} {--parser : Показать текущий receipt_parser_method на сервере}';
     protected $description = 'Отчёт по чекам: метод определения, причины несовпадения суммы';
 
     public function handle(): int
     {
+        if ($this->option('parser')) {
+            $this->showParserMethod();
+            return self::SUCCESS;
+        }
+
         $id = $this->option('id');
         $checks = $id
             ? Check::where('id', $id)->get()
@@ -81,5 +88,20 @@ class CheckReportCommand extends Command
         }
 
         return $row;
+    }
+
+    private function showParserMethod(): void
+    {
+        $this->info('=== Метод определения суммы и даты (receipt_parser_method) ===');
+        $bots = TelegramBot::all();
+        foreach ($bots as $bot) {
+            $settings = BotSettings::where('telegram_bot_id', $bot->id)->first();
+            $method = $settings->receipt_parser_method ?? 'legacy';
+            $label = $method === BotSettings::PARSER_ENHANCED ? 'Улучшенный (pdftotext, ReceiptParser)' : 'Классический (legacy)';
+            $this->line("Бот #{$bot->id} ({$bot->username}): <fg=" . ($method === 'enhanced' ? 'green' : 'yellow') . ">{$method}</> — {$label}");
+        }
+        if ($bots->isEmpty()) {
+            $this->warn('Нет ботов.');
+        }
     }
 }
