@@ -81,7 +81,8 @@ class AnalyzePdfsCommand extends Command
 
             $this->line("  [{$fileName}]");
             $this->line("    Банк: " . ($banks[$bank]['name'] ?? $bank));
-            $this->line("    Сумма: " . ($parsed['amount'] ? number_format($parsed['amount'], 2) . ' ₽' : '—'));
+            $amt = $parsed['amount'] ?? null;
+            $this->line("    Сумма: " . ($amt ? number_format($amt, 2) . ' ₽' : '—'));
             $this->line("    Дата: " . ($parsed['date'] ?? '—'));
             $this->line("    Confidence: " . ($parsed['parsing_confidence'] ?? '—'));
             $this->line("    Текст: " . mb_strlen($textProcessed) . " символов");
