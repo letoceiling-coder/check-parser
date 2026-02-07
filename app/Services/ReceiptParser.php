@@ -201,8 +201,8 @@ class ReceiptParser
         foreach (self::AMOUNT_KEYWORDS as $kw) {
             $pattern = '/' . preg_quote($kw, '/') . '[^\d]{0,60}' . self::AMOUNT_REGEX . '\s*[₽РрPpруб\.]?/ui';
             if (preg_match_all($pattern, $textOneLine, $m)) {
-                foreach ($m[1] as $numStr) {
-                    $context = mb_strtolower($m[0], 'UTF-8');
+                foreach ($m[1] as $i => $numStr) {
+                    $context = mb_strtolower(is_array($m[0]) ? $m[0][$i] : $m[0], 'UTF-8');
                     if ($this->hasAnyKeyword($context, self::BAD_AMOUNT_CONTEXT)) continue;
                     if (str_contains($context, '****')) continue;
 
