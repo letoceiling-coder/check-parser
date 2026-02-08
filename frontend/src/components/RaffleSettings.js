@@ -346,9 +346,12 @@ function RaffleSettings({ bot }) {
               >
                 <option value="legacy">Классический (текущий)</option>
                 <option value="enhanced">Улучшенный (pdftotext, контекст даты, оплачено/списано, уверенность)</option>
+                <option value="enhanced_ai">Интеллектуальный (улучшенный + AI при низкой уверенности)</option>
               </select>
               <p className="mt-1 text-xs text-gray-500">
-                Улучшенный: текстовый PDF без OCR, выбор даты по контексту, маркеры «оплачено»/«списано», оценка уверенности.
+                {formData.receipt_parser_method === 'enhanced_ai'
+                  ? 'Улучшенный парсер + LLM как fallback при низкой уверенности или отсутствии суммы/даты. Требует RECEIPT_AI_ENABLED и OPENAI_API_KEY.'
+                  : 'Улучшенный: текстовый PDF без OCR, выбор даты по контексту, маркеры «оплачено»/«списано», оценка уверенности.'}
               </p>
             </div>
           </div>

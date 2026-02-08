@@ -41,9 +41,10 @@ class BotSettings extends Model
         'receipt_parser_method',
     ];
 
-    /** Метод парсинга суммы и даты из чеков: legacy = классический, enhanced = улучшенный (pdftotext, контекст даты, оплачено/списано, confidence) */
+    /** Метод парсинга суммы и даты из чеков: legacy, enhanced, enhanced_ai (улучшенный + AI fallback при низкой уверенности) */
     public const PARSER_LEGACY = 'legacy';
     public const PARSER_ENHANCED = 'enhanced';
+    public const PARSER_ENHANCED_AI = 'enhanced_ai';
 
     protected $casts = [
         'total_slots' => 'integer',

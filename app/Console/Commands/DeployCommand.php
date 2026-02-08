@@ -31,7 +31,7 @@ class DeployCommand extends Command
 
         // Step 1: Build React app locally
         $this->info('Building React application...');
-        $buildResult = Process::path(base_path('frontend'))->run('npm run build');
+        $buildResult = Process::path(base_path('frontend'))->timeout(300)->run('npm run build');
         
         if (!$buildResult->successful()) {
             $this->error('Failed to build assets: ' . $buildResult->errorOutput());

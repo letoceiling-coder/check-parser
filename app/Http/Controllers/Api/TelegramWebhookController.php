@@ -129,6 +129,23 @@ class TelegramWebhookController extends Controller
         $botSettings = BotSettings::where('telegram_bot_id', $bot->id)->first();
         $isRaffleMode = $botSettings && $botSettings->is_active;
 
+        // Команды тестирования - всегда доступны
+        if ($text && str_starts_with($text, '/test')) {
+            $botUser = $this->getOrCreateBotUser($bot, $telegramUserId, $userData);
+            $this->handleTestCommand($bot, $botUser, $chatId);
+            return;
+        }
+        if ($text && str_starts_with($text, '/exit')) {
+            $botUser = $this->getOrCreateBotUser($bot, $telegramUserId, $userData);
+            $this->handleExitTestCommand($bot, $botUser, $chatId);
+            return;
+        }
+        if ($text && str_starts_with($text, '/check-reset')) {
+            $botUser = $this->getOrCreateBotUser($bot, $telegramUserId, $userData);
+            $this->handleCheckResetCommand($bot, $botUser, $chatId);
+            return;
+        }
+        
         // /admin и /status обрабатываем всегда (независимо от режима розыгрыша), чтобы запрос появлялся в admin-requests
         if ($text && str_starts_with($text, '/admin')) {
             $botUser = $this->getOrCreateBotUser($bot, $telegramUserId, $userData);
@@ -138,6 +155,13 @@ class TelegramWebhookController extends Controller
         if ($text && str_starts_with($text, '/status')) {
             $botUser = $this->getOrCreateBotUser($bot, $telegramUserId, $userData);
             $this->handleStatusCommand($bot, $botUser, $chatId);
+            return;
+        }
+        
+        // Обработка TEST_MODE - приоритет перед обычным режимом
+        $botUser = $this->getOrCreateBotUser($bot, $telegramUserId, $userData);
+        if ($botUser->fsm_state === BotUser::STATE_TEST_MODE) {
+            $this->handleTestMode($bot, $botUser, $chatId, $message, $botSettings);
             return;
         }
 
@@ -1205,17 +1229,19 @@ class TelegramWebhookController extends Controller
     {
         try {
             $fullPath = Storage::disk('local')->path($filePath);
-            $useEnhanced = ($parserMethod === BotSettings::PARSER_ENHANCED);
+            $useEnhanced = in_array($parserMethod, [BotSettings::PARSER_ENHANCED, BotSettings::PARSER_ENHANCED_AI], true);
+            $useAiFallback = ($parserMethod === BotSettings::PARSER_ENHANCED_AI);
 
             // Улучшенный режим + PDF: сначала пробуем извлечь текст без OCR (текстовый PDF)
             if ($isPdf && $useEnhanced) {
                 $textFromPdf = $this->extractTextFromTextPdf($fullPath);
                 if ($textFromPdf !== null && mb_strlen($textFromPdf, 'UTF-8') >= 100) {
-                    $checkData = $this->parsePaymentAmount($textFromPdf, true);
+                    $checkData = $this->parsePaymentAmount($textFromPdf, true, $useAiFallback);
                     if ($checkData) {
                         $checkData['ocr_method'] = 'pdftotext';
                         $checkData['text_length'] = mb_strlen($textFromPdf, 'UTF-8');
                         $checkData['readable_ratio'] = 1.0;
+                        $checkData['source'] = $checkData['source'] ?? 'pdf';
                         Log::info('Check parsed from text PDF (pdftotext), no OCR used');
                         return $checkData;
                     }
@@ -1324,11 +1350,11 @@ class TelegramWebhookController extends Controller
                 return null;
             }
 
-            // Parse payment amount from text (enhanced = контекст даты, оплачено/списано, confidence)
-            $checkData = $this->parsePaymentAmount($extractedText, $useEnhanced);
+            // Parse payment amount from text (enhanced = контекст даты, оплачено/списано, confidence; enhanced_ai = + AI fallback)
+            $checkData = $this->parsePaymentAmount($extractedText, $useEnhanced, $useAiFallback);
             
             if ($checkData) {
-                // Добавляем информацию об OCR методе для статистики
+                $checkData['source'] = $checkData['source'] ?? ($isPdf ? 'pdf' : 'ocr');
                 $checkData['ocr_method'] = $usedOcrMethod;
                 $checkData['text_length'] = $ocrTextLength;
                 $checkData['readable_ratio'] = $ocrReadableRatio;
@@ -2580,31 +2606,63 @@ PYTHON;
 
     /**
      * Parse payment amount from extracted text.
-     * When $useEnhanced: adds "оплачено"/"списано" patterns, date-by-context, parsing_confidence.
+     * When $useEnhanced: ReceiptParser (дата по контексту, оплачено/списано, parsing_confidence).
+     * When $useAiFallback: при confidence < 0.9 или отсутствии суммы/даты вызывается AIReceiptExtractor.
      */
-    private function parsePaymentAmount(string $text, bool $useEnhanced = false): ?array
+    private function parsePaymentAmount(string $text, bool $useEnhanced = false, bool $useAiFallback = false): ?array
     {
         try {
             Log::info('Parsing payment amount from text', [
                 'text_length' => strlen($text),
                 'use_enhanced' => $useEnhanced,
+                'use_ai_fallback' => $useAiFallback,
                 'text_preview' => substr($text, 0, 500)
             ]);
 
-            // Улучшенный режим: ReceiptParser (дата по контексту, сумма только по ключевым словам, confidence)
+            $ocrResult = null;
             if ($useEnhanced) {
                 $parser = new \App\Services\ReceiptParser($text);
-                $result = $parser->parse();
-                if (!empty($result['amount']) && !empty($result['date'])) {
+                $ocrResult = $parser->parse();
+                $confidence = (float) ($ocrResult['parsing_confidence'] ?? 0);
+                $hasFull = !empty($ocrResult['amount']) && !empty($ocrResult['date']);
+                if ($hasFull && $confidence >= 0.9) {
                     Log::info('ReceiptParser: parsed successfully', [
-                        'amount' => $result['amount'],
-                        'date' => $result['date'],
-                        'confidence' => $result['parsing_confidence'] ?? null,
+                        'amount' => $ocrResult['amount'],
+                        'date' => $ocrResult['date'],
+                        'confidence' => $confidence,
                     ]);
-                    return $result;
+                    return $ocrResult;
                 }
-                if (!empty($result['amount']) || !empty($result['date'])) {
-                    Log::info('ReceiptParser: partial result, falling back to legacy', $result);
+                if (!empty($ocrResult['amount']) || !empty($ocrResult['date'])) {
+                    Log::info('ReceiptParser: partial or low confidence, considering AI fallback', [
+                        'confidence' => $confidence,
+                        'has_amount' => !empty($ocrResult['amount']),
+                        'has_date' => !empty($ocrResult['date']),
+                    ]);
+                }
+            }
+
+            if ($useAiFallback && config('receipt_ai.enabled', false)) {
+                $extractor = \App\Services\Receipt\AIReceiptExtractor::fromConfig();
+                if ($extractor->isConfigured()) {
+                    $context = [];
+                    if ($ocrResult !== null) {
+                        if (!empty($ocrResult['amount'])) {
+                            $context['previous_amount'] = (float) $ocrResult['amount'];
+                        }
+                        if (!empty($ocrResult['date'])) {
+                            $context['previous_date'] = $ocrResult['date'];
+                        }
+                    }
+                    $aiResult = $extractor->extract($text, $context);
+                    if ($aiResult->isValid()) {
+                        Log::info('parsePaymentAmount: using AI result', [
+                            'amount' => $aiResult->amount,
+                            'date' => $aiResult->date,
+                            'confidence' => $aiResult->confidence,
+                        ]);
+                        return $aiResult->toArray();
+                    }
                 }
             }
             
@@ -3881,5 +3939,325 @@ PYTHON;
             Log::error('Error sending document: ' . $e->getMessage());
         }
         return null;
+    }
+    
+    // ==========================================
+    // Режим тестирования
+    // ==========================================
+    
+    /**
+     * Handle /test command - enter test mode
+     */
+    private function handleTestCommand(TelegramBot $bot, BotUser $botUser, int $chatId): void
+    {
+        $botUser->update([
+            'fsm_state' => BotUser::STATE_TEST_MODE,
+            'fsm_data' => ['skip_duplicate_check' => false],
+        ]);
+        
+        $message = "🧪 <b>Режим тестирования активирован</b>\n\n"
+            . "Отправьте PDF-чек для анализа.\n\n"
+            . "Вы получите:\n"
+            . "• Дату операции\n"
+            . "• Сумму платежа\n"
+            . "• Уверенность распознавания (confidence)\n"
+            . "• Метод извлечения (pdf/ocr/ai)\n"
+            . "• Банк (если определён)\n"
+            . "• Проверку уникальности\n\n"
+            . "<b>Команды:</b>\n"
+            . "/check-reset - сбросить проверку уникальности\n"
+            . "/exit - выйти из режима тестирования";
+        
+        $this->sendMessage($bot, $chatId, $message, parseMode: 'HTML');
+        
+        Log::info('Test mode activated', [
+            'bot_id' => $bot->id,
+            'user_id' => $botUser->id,
+            'chat_id' => $chatId,
+        ]);
+    }
+    
+    /**
+     * Handle /exit command - exit test mode
+     */
+    private function handleExitTestCommand(TelegramBot $bot, BotUser $botUser, int $chatId): void
+    {
+        if ($botUser->fsm_state !== BotUser::STATE_TEST_MODE) {
+            $this->sendMessage($bot, $chatId, "❌ Вы не находитесь в режиме тестирования.");
+            return;
+        }
+        
+        $botUser->update([
+            'fsm_state' => BotUser::STATE_IDLE,
+            'fsm_data' => null,
+        ]);
+        
+        $this->sendMessage($bot, $chatId, "✅ Режим тестирования завершён.\n\nОтправьте /start для начала работы.");
+        
+        Log::info('Test mode deactivated', [
+            'bot_id' => $bot->id,
+            'user_id' => $botUser->id,
+            'chat_id' => $chatId,
+        ]);
+    }
+    
+    /**
+     * Handle /check-reset command - reset duplicate check
+     */
+    private function handleCheckResetCommand(TelegramBot $bot, BotUser $botUser, int $chatId): void
+    {
+        if ($botUser->fsm_state !== BotUser::STATE_TEST_MODE) {
+            $this->sendMessage($bot, $chatId, "❌ Эта команда доступна только в режиме тестирования.\n\nИспользуйте /test для входа в режим.");
+            return;
+        }
+        
+        $fsmData = $botUser->fsm_data ?? [];
+        $fsmData['skip_duplicate_check'] = true;
+        $botUser->update(['fsm_data' => $fsmData]);
+        
+        $this->sendMessage($bot, $chatId, "✅ Проверка уникальности сброшена.\n\nСледующий чек будет обработан без проверки дубликатов.");
+        
+        Log::info('Duplicate check reset in test mode', [
+            'bot_id' => $bot->id,
+            'user_id' => $botUser->id,
+            'chat_id' => $chatId,
+        ]);
+    }
+    
+    /**
+     * Handle test mode - process PDF and return analysis
+     */
+    private function handleTestMode(TelegramBot $bot, BotUser $botUser, int $chatId, array $message, ?BotSettings $botSettings): void
+    {
+        $text = $message['text'] ?? null;
+        $document = $message['document'] ?? null;
+        $photo = $message['photo'] ?? null;
+        
+        // Игнорируем команды (уже обработаны выше)
+        if ($text && str_starts_with($text, '/')) {
+            return;
+        }
+        
+        // Фото не принимаем
+        if ($photo) {
+            $this->sendMessage($bot, $chatId, "❌ В режиме тестирования принимаются только PDF-файлы.\n\nОтправьте PDF-чек.");
+            return;
+        }
+        
+        // Обрабатываем только PDF документы
+        if ($document) {
+            if (!$this->isPdfDocument($document)) {
+                $this->sendMessage($bot, $chatId, "❌ Принимаются только PDF-файлы.\n\nОтправьте PDF-чек.");
+                return;
+            }
+            
+            $this->handleTestPdfDocument($bot, $botUser, $chatId, $document, $botSettings);
+            return;
+        }
+        
+        // Остальные сообщения
+        if ($text) {
+            $this->sendMessage($bot, $chatId, "📄 Отправьте PDF-чек для анализа.\n\nИспользуйте /exit для выхода из режима тестирования.");
+        }
+    }
+    
+    /**
+     * Process PDF in test mode and return detailed analysis
+     */
+    private function handleTestPdfDocument(TelegramBot $bot, BotUser $botUser, int $chatId, array $document, ?BotSettings $botSettings): void
+    {
+        $fileId = $document['file_id'];
+        $fileName = $document['file_name'] ?? 'document.pdf';
+        
+        $this->sendMessage($bot, $chatId, "⏳ Обрабатываю чек...");
+        
+        try {
+            // Download file
+            $fileInfo = $this->getFile($bot, $fileId);
+            if (!$fileInfo || !isset($fileInfo['file_path'])) {
+                $this->sendMessage($bot, $chatId, "❌ Не удалось получить информацию о файле.");
+                return;
+            }
+            
+            $fileContent = $this->downloadFile($bot, $fileInfo['file_path']);
+            if (!$fileContent) {
+                $this->sendMessage($bot, $chatId, "❌ Не удалось скачать файл.");
+                return;
+            }
+            
+            // Save to storage
+            $filePath = 'test_mode/' . uniqid('test_', true) . '.pdf';
+            Storage::disk('local')->put($filePath, $fileContent);
+            
+            // Get parser method from settings
+            $parserMethod = $botSettings->receipt_parser_method ?? BotSettings::PARSER_LEGACY;
+            
+            // Process with OCR
+            $checkData = $this->processCheckWithOCR($filePath, true, $parserMethod);
+            
+            if (!$checkData) {
+                $this->sendMessage($bot, $chatId, "❌ Не удалось обработать чек.\n\nПроверьте качество PDF-файла.");
+                Storage::disk('local')->delete($filePath);
+                return;
+            }
+            
+            // Check for duplicate (unless skip flag is set)
+            $fsmData = $botUser->fsm_data ?? [];
+            $skipDuplicateCheck = $fsmData['skip_duplicate_check'] ?? false;
+            $isDuplicate = false;
+            $duplicateCheck = null;
+            
+            if (!$skipDuplicateCheck && isset($checkData['amount'], $checkData['date'])) {
+                $duplicateCheck = Check::where('telegram_bot_id', $bot->id)
+                    ->where('sum', $checkData['amount'])
+                    ->where('date', $checkData['date'])
+                    ->where('status', 'approved')
+                    ->first();
+                
+                $isDuplicate = $duplicateCheck !== null;
+            }
+            
+            // Reset skip flag after use
+            if ($skipDuplicateCheck) {
+                $fsmData['skip_duplicate_check'] = false;
+                $botUser->update(['fsm_data' => $fsmData]);
+            }
+            
+            // Format response
+            $response = $this->formatTestModeResponse($checkData, $isDuplicate, $duplicateCheck, $fileName, $parserMethod);
+            
+            $this->sendMessage($bot, $chatId, $response, parseMode: 'HTML');
+            
+            // Clean up
+            Storage::disk('local')->delete($filePath);
+            
+            Log::info('Test mode: PDF processed', [
+                'bot_id' => $bot->id,
+                'user_id' => $botUser->id,
+                'file_name' => $fileName,
+                'amount' => $checkData['amount'] ?? null,
+                'date' => $checkData['date'] ?? null,
+                'confidence' => $checkData['parsing_confidence'] ?? null,
+                'source' => $checkData['source'] ?? null,
+                'is_duplicate' => $isDuplicate,
+            ]);
+            
+        } catch (\Exception $e) {
+            Log::error('Test mode: PDF processing error', [
+                'bot_id' => $bot->id,
+                'user_id' => $botUser->id,
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+            ]);
+            
+            $this->sendMessage($bot, $chatId, "❌ Ошибка при обработке чека:\n\n" . $e->getMessage());
+        }
+    }
+    
+    /**
+     * Format test mode response
+     */
+    private function formatTestModeResponse(array $checkData, bool $isDuplicate, ?Check $duplicateCheck, string $fileName, string $parserMethod): string
+    {
+        $amount = $checkData['amount'] ?? null;
+        $date = $checkData['date'] ?? null;
+        $confidence = $checkData['parsing_confidence'] ?? null;
+        $source = $checkData['source'] ?? 'unknown';
+        $bankCode = $checkData['bank_code'] ?? null;
+        $ocrMethod = $checkData['ocr_method'] ?? null;
+        
+        $response = "🧪 <b>Результат анализа чека</b>\n\n";
+        $response .= "📄 <b>Файл:</b> {$fileName}\n";
+        $response .= "⚙️ <b>Метод парсинга:</b> " . $this->getParserMethodName($parserMethod) . "\n\n";
+        
+        // Date
+        if ($date) {
+            $dateFormatted = date('d.m.Y', strtotime($date));
+            if (str_contains($date, ':')) {
+                $dateFormatted .= ' ' . date('H:i', strtotime($date));
+            }
+            $response .= "📅 <b>Дата операции:</b> {$dateFormatted}\n";
+        } else {
+            $response .= "📅 <b>Дата операции:</b> ❌ не найдена\n";
+        }
+        
+        // Amount
+        if ($amount !== null) {
+            $amountFormatted = number_format($amount, 2, '.', ' ');
+            $response .= "💰 <b>Сумма:</b> {$amountFormatted} ₽\n";
+        } else {
+            $response .= "💰 <b>Сумма:</b> ❌ не найдена\n";
+        }
+        
+        // Confidence
+        if ($confidence !== null) {
+            $confidencePercent = round($confidence * 100);
+            $confidenceEmoji = $confidence >= 0.9 ? '✅' : ($confidence >= 0.7 ? '⚠️' : '❌');
+            $response .= "🎯 <b>Уверенность:</b> {$confidenceEmoji} {$confidencePercent}%\n";
+        }
+        
+        // Source
+        $sourceNames = [
+            'pdf' => 'Текстовый PDF (pdftotext)',
+            'ocr' => 'OCR',
+            'ai' => 'AI (LLM)',
+            'hybrid_enhanced_ai' => 'Гибрид (Enhanced + AI)',
+        ];
+        $sourceName = $sourceNames[$source] ?? $source;
+        $response .= "🔍 <b>Метод извлечения:</b> {$sourceName}\n";
+        
+        if ($ocrMethod && $source === 'ocr') {
+            $ocrMethodNames = [
+                'extractTextWithRemoteTesseract' => 'Remote Tesseract',
+                'extractTextWithTesseract' => 'Local Tesseract',
+                'extractTextWithOCRspace' => 'OCR.space',
+                'extractTextWithGoogleVision' => 'Google Vision',
+            ];
+            $ocrMethodName = $ocrMethodNames[$ocrMethod] ?? $ocrMethod;
+            $response .= "   └─ OCR: {$ocrMethodName}\n";
+        }
+        
+        // Bank
+        if ($bankCode) {
+            $bankNames = [
+                'sber' => 'Сбербанк',
+                'tinkoff' => 'Тинькофф',
+                'alfabank' => 'Альфа-Банк',
+                'vtb' => 'ВТБ',
+                'ozonbank' => 'Озон Банк',
+                'gazprombank' => 'Газпромбанк',
+            ];
+            $bankName = $bankNames[$bankCode] ?? $bankCode;
+            $response .= "🏦 <b>Банк:</b> {$bankName}\n";
+        }
+        
+        // Duplicate check
+        $response .= "\n🔄 <b>Проверка уникальности:</b>\n";
+        if ($isDuplicate && $duplicateCheck) {
+            $response .= "❌ Дубликат найден!\n";
+            $response .= "   └─ Check ID: {$duplicateCheck->id}\n";
+            $response .= "   └─ Создан: " . $duplicateCheck->created_at->format('d.m.Y H:i') . "\n";
+        } else {
+            $response .= "✅ Чек уникален\n";
+        }
+        
+        $response .= "\n<b>Команды:</b>\n";
+        $response .= "/check-reset - сбросить проверку уникальности\n";
+        $response .= "/exit - выйти из режима тестирования";
+        
+        return $response;
+    }
+    
+    /**
+     * Get parser method name
+     */
+    private function getParserMethodName(string $method): string
+    {
+        return match($method) {
+            BotSettings::PARSER_LEGACY => 'Классический',
+            BotSettings::PARSER_ENHANCED => 'Улучшенный',
+            BotSettings::PARSER_ENHANCED_AI => 'Интеллектуальный (AI)',
+            default => $method,
+        };
     }
 }

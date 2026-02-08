@@ -167,6 +167,31 @@ certbot --nginx -d auto.siteaccess.ru --non-interactive --agree-tos -m admin@sit
 
 ---
 
+## Переменные для деплоя (локальная машина)
+
+На ПК в `.env` для команды `php artisan deploy` должны быть указаны:
+
+- **DEPLOY_URL=https://auto.siteaccess.ru** — адрес сайта, на который уходит запрос на обновление (не project.siteaccess.ru).
+- **DEPLOY_TOKEN** — тот же секретный токен, что прописан в `.env` на сервере.
+
+Иначе деплой будет вызывать не тот хост.
+
+---
+
+## poppler-utils (сервер)
+
+Для улучшенного парсера чеков (метод «Улучшенный» в настройках бота) используется извлечение текста из PDF без OCR (команда `pdftotext`). На сервере должен быть установлен пакет **poppler-utils**:
+
+```bash
+# Ubuntu/Debian
+sudo apt-get update
+sudo apt-get install -y poppler-utils
+```
+
+Проверка: `pdftotext -v`. Если команда есть — текстовые PDF будут обрабатываться без OCR.
+
+---
+
 ## Краткая последовательность (копировать целиком)
 
 После загрузки `dsc23ytp_check.sql` на сервер в `/root/`:

@@ -60,7 +60,7 @@ If you discover a security vulnerability within Laravel, please send an e-mail t
 
 1. Установите переменные окружения в `.env`:
 ```env
-DEPLOY_URL=https://project.siteaccess.ru
+DEPLOY_URL=https://auto.siteaccess.ru
 DEPLOY_TOKEN=your-secret-token-here
 ```
 

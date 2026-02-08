@@ -32,6 +32,9 @@ class BotFSM
     // Состояния для редактирования (админ в боте)
     public const STATE_ADMIN_EDIT_AMOUNT = 'ADMIN_EDIT_AMOUNT';
     public const STATE_ADMIN_CONFIRM_EDIT = 'ADMIN_CONFIRM_EDIT';
+    
+    // Режим тестирования
+    public const STATE_TEST_MODE = 'TEST_MODE';
 
     // ==========================================
     // Callback data префиксы

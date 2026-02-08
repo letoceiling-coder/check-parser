@@ -54,6 +54,7 @@ class BotUser extends Model
     public const STATE_PENDING_REVIEW = 'PENDING_REVIEW';
     public const STATE_APPROVED = 'APPROVED';
     public const STATE_REJECTED = 'REJECTED';
+    public const STATE_TEST_MODE = 'TEST_MODE';
 
     // ==========================================
     // Шифрование/расшифровка персональных данных
