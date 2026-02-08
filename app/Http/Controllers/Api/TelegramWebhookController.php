@@ -4045,9 +4045,10 @@ PYTHON;
         
         $fsmData = $botUser->fsm_data ?? [];
         $fsmData['skip_duplicate_check'] = true;
+        $fsmData['test_seen_checks'] = []; // очищаем историю сеанса — повторная отправка того же чека снова будет «первой»
         $botUser->update(['fsm_data' => $fsmData]);
         
-        $this->sendMessage($bot, $chatId, "✅ Проверка уникальности сброшена.\n\nСледующий чек будет обработан без проверки дубликатов.");
+        $this->sendMessage($bot, $chatId, "✅ Проверка уникальности сброшена.\n\nИстория чеков в этом сеансе очищена. Можно снова отправить тот же чек — он будет учтён как первый.");
         
         Log::info('Duplicate check reset in test mode', [
             'bot_id' => $bot->id,
@@ -4135,18 +4136,45 @@ PYTHON;
             // Check for duplicate (unless skip flag is set)
             $fsmData = $botUser->fsm_data ?? [];
             $skipDuplicateCheck = $fsmData['skip_duplicate_check'] ?? false;
+            $testSeenChecks = $fsmData['test_seen_checks'] ?? [];
+            if (!is_array($testSeenChecks)) {
+                $testSeenChecks = [];
+            }
+            
             $isDuplicate = false;
             $duplicateCheck = null;
+            $duplicateSource = null; // 'db' | 'session'
             
-            if (!$skipDuplicateCheck && isset($checkData['amount'], $checkData['date'])) {
-                $dateOnly = substr($checkData['date'], 0, 10); // Y-m-d
-                $duplicateCheck = Check::where('telegram_bot_id', $bot->id)
-                    ->where('amount', $checkData['amount'])
-                    ->whereDate('check_date', $dateOnly)
-                    ->where('review_status', 'approved')
-                    ->first();
+            if (isset($checkData['amount'], $checkData['date'])) {
+                $dateOnly = substr($checkData['date'], 0, 10);
+                $sessionKey = sprintf('%.2f_%s', (float) $checkData['amount'], $dateOnly);
                 
-                $isDuplicate = $duplicateCheck !== null;
+                if (!$skipDuplicateCheck) {
+                    // 1) Дубликат в текущем сеансе теста (уже отправляли такой чек)
+                    if (in_array($sessionKey, $testSeenChecks, true)) {
+                        $isDuplicate = true;
+                        $duplicateSource = 'session';
+                    }
+                    // 2) Дубликат в базе (чек уже принят в розыгрыше)
+                    if (!$isDuplicate) {
+                        $duplicateCheck = Check::where('telegram_bot_id', $bot->id)
+                            ->where('amount', $checkData['amount'])
+                            ->whereDate('check_date', $dateOnly)
+                            ->where('review_status', 'approved')
+                            ->first();
+                        if ($duplicateCheck !== null) {
+                            $isDuplicate = true;
+                            $duplicateSource = 'db';
+                        }
+                    }
+                }
+                
+                // Запоминаем чек в сеансе (чтобы повторная отправка считалась дубликатом)
+                if (!in_array($sessionKey, $testSeenChecks, true)) {
+                    $testSeenChecks[] = $sessionKey;
+                    $fsmData['test_seen_checks'] = $testSeenChecks;
+                    $botUser->update(['fsm_data' => $fsmData]);
+                }
             }
             
             // Reset skip flag after use
@@ -4156,7 +4184,7 @@ PYTHON;
             }
             
             // Format response
-            $response = $this->formatTestModeResponse($checkData, $isDuplicate, $duplicateCheck, $fileName, $parserMethod);
+            $response = $this->formatTestModeResponse($checkData, $isDuplicate, $duplicateSource, $duplicateCheck, $fileName, $parserMethod);
             
             $this->sendMessage($bot, $chatId, $response, true, 'HTML');
             
@@ -4188,8 +4216,9 @@ PYTHON;
     
     /**
      * Format test mode response
+     * @param string|null $duplicateSource 'db' = в базе принят, 'session' = уже отправляли в этом сеансе теста
      */
-    private function formatTestModeResponse(array $checkData, bool $isDuplicate, ?Check $duplicateCheck, string $fileName, string $parserMethod): string
+    private function formatTestModeResponse(array $checkData, bool $isDuplicate, ?string $duplicateSource, ?Check $duplicateCheck, string $fileName, string $parserMethod): string
     {
         $amount = $checkData['amount'] ?? null;
         $date = $checkData['date'] ?? null;
@@ -4265,10 +4294,16 @@ PYTHON;
         
         // Duplicate check
         $response .= "\n🔄 <b>Проверка уникальности:</b>\n";
-        if ($isDuplicate && $duplicateCheck) {
-            $response .= "❌ Дубликат найден!\n";
-            $response .= "   └─ Check ID: {$duplicateCheck->id}\n";
-            $response .= "   └─ Создан: " . $duplicateCheck->created_at->format('d.m.Y H:i') . "\n";
+        if ($isDuplicate) {
+            if ($duplicateSource === 'session') {
+                $response .= "❌ Дубликат: этот чек уже отправляли в текущем сеансе теста.\n";
+            } elseif ($duplicateSource === 'db' && $duplicateCheck) {
+                $response .= "❌ Дубликат: чек уже принят в розыгрыше.\n";
+                $response .= "   └─ Check ID: {$duplicateCheck->id}\n";
+                $response .= "   └─ Создан: " . $duplicateCheck->created_at->format('d.m.Y H:i') . "\n";
+            } else {
+                $response .= "❌ Дубликат\n";
+            }
         } else {
             $response .= "✅ Чек уникален\n";
         }
