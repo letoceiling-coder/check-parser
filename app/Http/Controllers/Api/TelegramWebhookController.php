@@ -4139,10 +4139,11 @@ PYTHON;
             $duplicateCheck = null;
             
             if (!$skipDuplicateCheck && isset($checkData['amount'], $checkData['date'])) {
+                $dateOnly = substr($checkData['date'], 0, 10); // Y-m-d
                 $duplicateCheck = Check::where('telegram_bot_id', $bot->id)
-                    ->where('sum', $checkData['amount'])
-                    ->where('date', $checkData['date'])
-                    ->where('status', 'approved')
+                    ->where('amount', $checkData['amount'])
+                    ->whereDate('check_date', $dateOnly)
+                    ->where('review_status', 'approved')
                     ->first();
                 
                 $isDuplicate = $duplicateCheck !== null;
