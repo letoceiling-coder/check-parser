@@ -24,6 +24,8 @@ function Checks() {
   const [showCompleteModal, setShowCompleteModal] = useState(false);
   const [showNewRaffleModal, setShowNewRaffleModal] = useState(false);
   const [raffleSuccess, setRaffleSuccess] = useState(null);
+  const [reparseFailedLoading, setReparseFailedLoading] = useState(false);
+  const [reparseFailedMessage, setReparseFailedMessage] = useState(null);
 
   const fetchChecks = useCallback(async (page = 1) => {
     setLoading(true);
@@ -297,10 +299,26 @@ function Checks() {
             <div className="text-3xl font-bold text-yellow-600">{stats.partial}</div>
             <div className="text-gray-600 text-sm">Частично</div>
           </div>
-          <div className="bg-white rounded-xl shadow-lg p-5 border-l-4 border-red-500">
+          <div className="bg-white rounded-xl shadow-lg p-5 border-l-4 border-red-500 flex flex-col">
             <div className="text-3xl font-bold text-red-600">{stats.failed}</div>
             <div className="text-gray-600 text-sm">Ошибки</div>
+            {stats.failed > 0 && (
+              <button
+                type="button"
+                onClick={handleReparseFailed}
+                disabled={reparseFailedLoading}
+                className="mt-3 w-full px-3 py-2 bg-red-50 text-red-700 border border-red-200 rounded-lg text-sm font-medium hover:bg-red-100 disabled:opacity-50 transition"
+              >
+                {reparseFailedLoading ? '⏳ Переобработка...' : '🔄 Переобработать чеки с ошибкой'}
+              </button>
+            )}
           </div>
+        </div>
+      )}
+
+      {reparseFailedMessage && (
+        <div className="bg-blue-50 border border-blue-200 text-blue-800 px-4 py-3 rounded-lg mb-6">
+          {reparseFailedMessage}
         </div>
       )}
 

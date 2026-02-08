@@ -96,34 +96,84 @@ class CheckController extends Controller
     public function reparse(int $id): JsonResponse
     {
         $check = Check::findOrFail($id);
+        $result = $this->doReparseCheck($check);
+        if (!$result['success']) {
+            $status = $result['status'] ?? 422;
+            return response()->json(['success' => false, 'message' => $result['message']], $status);
+        }
+        return response()->json([
+            'success' => true,
+            'message' => 'Чек перераспознан',
+            'check' => $check->fresh(),
+        ]);
+    }
 
-        if (!$check->file_path || !Storage::disk('local')->exists($check->file_path)) {
-            return response()->json(['success' => false, 'message' => 'Файл не найден'], 404);
+    /**
+     * Массовая переобработка чеков со статусом «Ошибка» (только PDF).
+     */
+    public function reparseFailed(Request $request): JsonResponse
+    {
+        $limit = min((int) $request->get('limit', 50), 100);
+        $checks = Check::where('status', 'failed')
+            ->where('file_type', 'pdf')
+            ->whereNotNull('file_path')
+            ->orderBy('id')
+            ->limit($limit)
+            ->get();
+
+        $processed = 0;
+        $successCount = 0;
+        $results = [];
+
+        foreach ($checks as $check) {
+            if (!Storage::disk('local')->exists($check->file_path)) {
+                $results[] = ['id' => $check->id, 'success' => false, 'message' => 'Файл не найден'];
+                $processed++;
+                continue;
+            }
+            $result = $this->doReparseCheck($check);
+            $processed++;
+            if ($result['success']) {
+                $successCount++;
+                $results[] = ['id' => $check->id, 'success' => true];
+            } else {
+                $results[] = ['id' => $check->id, 'success' => false, 'message' => $result['message']];
+            }
         }
 
+        return response()->json([
+            'success' => true,
+            'message' => "Обработано: {$processed}, успешно перераспознано: {$successCount}",
+            'processed' => $processed,
+            'success_count' => $successCount,
+            'results' => $results,
+        ]);
+    }
+
+    /**
+     * Внутренняя логика перераспознавания одного чека (PDF, pdftotext + ReceiptParser).
+     */
+    private function doReparseCheck(Check $check): array
+    {
+        if (!$check->file_path || !Storage::disk('local')->exists($check->file_path)) {
+            return ['success' => false, 'message' => 'Файл не найден', 'status' => 404];
+        }
         if ($check->file_type !== 'pdf') {
-            return response()->json(['success' => false, 'message' => 'Перераспознавание поддерживается только для PDF'], 400);
+            return ['success' => false, 'message' => 'Перераспознавание только для PDF', 'status' => 400];
         }
 
         $fullPath = Storage::disk('local')->path($check->file_path);
         $text = $this->extractTextFromPdf($fullPath);
 
         if (!$text || mb_strlen($text, 'UTF-8') < 50) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Не удалось извлечь текст (PDF может быть скан-копией, pdftotext нужен на сервере)',
-            ], 422);
+            return ['success' => false, 'message' => 'Не удалось извлечь текст (скан или pdftotext недоступен)'];
         }
 
         $parser = new ReceiptParser($text);
         $parsed = $parser->parse();
 
         if (empty($parsed['amount']) && empty($parsed['date'])) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Не удалось определить сумму и дату из текста',
-                'text_preview' => mb_substr($text, 0, 300),
-            ], 422);
+            return ['success' => false, 'message' => 'Не удалось определить сумму и дату'];
         }
 
         $check->amount = $parsed['amount'] ?? $parsed['sum'] ?? $check->amount;
@@ -144,11 +194,7 @@ class CheckController extends Controller
         $check->needs_review = ($check->parsing_confidence !== null && (float) $check->parsing_confidence < 0.7);
         $check->save();
 
-        return response()->json([
-            'success' => true,
-            'message' => 'Чек перераспознан',
-            'check' => $check->fresh(),
-        ]);
+        return ['success' => true];
     }
 
     private function extractTextFromPdf(string $pdfPath): ?string
