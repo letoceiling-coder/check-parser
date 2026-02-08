@@ -1235,7 +1235,7 @@ class TelegramWebhookController extends Controller
             // Улучшенный режим + PDF: сначала пробуем извлечь текст без OCR (текстовый PDF)
             if ($isPdf && $useEnhanced) {
                 $textFromPdf = $this->extractTextFromTextPdf($fullPath);
-                if ($textFromPdf !== null && mb_strlen($textFromPdf, 'UTF-8') >= 100) {
+                if ($textFromPdf !== null && mb_strlen($textFromPdf, 'UTF-8') >= 50) {
                     $checkData = $this->parsePaymentAmount($textFromPdf, true, $useAiFallback);
                     if ($checkData) {
                         $checkData['ocr_method'] = 'pdftotext';
@@ -2143,13 +2143,42 @@ PYTHON;
 
             return Storage::disk('local')->path($imagePath);
         } catch (\Exception $e) {
-            Log::error('PDF conversion failed: ' . $e->getMessage(), [
-                'trace' => substr($e->getTraceAsString(), 0, 500)
-            ]);
-            return null;
+            Log::warning('Imagick PDF conversion failed: ' . $e->getMessage());
+            return $this->convertPdfToImageWithPdftoppm($pdfPath);
         }
     }
 
+    /**
+     * Fallback: convert PDF to image using pdftoppm (poppler-utils). Used when Imagick fails (e.g. policy or no Ghostscript).
+     */
+    private function convertPdfToImageWithPdftoppm(string $pdfPath): ?string
+    {
+        if (!file_exists($pdfPath) || !is_readable($pdfPath)) {
+            Log::warning('convertPdfToImageWithPdftoppm: file not readable', ['path' => $pdfPath]);
+            return null;
+        }
+        $outDir = Storage::disk('local')->path('telegram');
+        if (!is_dir($outDir)) {
+            mkdir($outDir, 0755, true);
+        }
+        $prefix = 'pdf_' . uniqid();
+        $outPrefix = $outDir . '/' . $prefix;
+        $escapedPath = escapeshellarg($pdfPath);
+        $escapedOut = escapeshellarg($outPrefix);
+        $devNull = PHP_OS_FAMILY === 'Windows' ? 'NUL' : '/dev/null';
+        $command = "pdftoppm -png -r 300 -singlefile {$escapedPath} {$escapedOut} 2>{$devNull}";
+        try {
+            exec($command, $output, $returnCode);
+            $pngPath = $outPrefix . '.png';
+            if ($returnCode === 0 && file_exists($pngPath) && filesize($pngPath) > 0) {
+                Log::info('PDF converted to image via pdftoppm', ['image' => $pngPath]);
+                return $pngPath;
+            }
+        } catch (\Throwable $e) {
+            Log::warning('pdftoppm failed: ' . $e->getMessage());
+        }
+        return null;
+    }
 
     /**
      * Extract text using OCR.space API (free tier available)
@@ -4082,15 +4111,14 @@ PYTHON;
                 return;
             }
             
-            $fileContent = $this->downloadFile($bot, $fileInfo['file_path']);
-            if (!$fileContent) {
+            $downloadedPath = $this->downloadFile($bot, $fileInfo['file_path']);
+            if (!$downloadedPath) {
                 $this->sendMessage($bot, $chatId, "❌ Не удалось скачать файл.");
                 return;
             }
             
-            // Save to storage
-            $filePath = 'test_mode/' . uniqid('test_', true) . '.pdf';
-            Storage::disk('local')->put($filePath, $fileContent);
+            // downloadFile saves to storage and returns relative path (e.g. telegram/xxx.pdf)
+            $filePath = $downloadedPath;
             
             // Get parser method from settings
             $parserMethod = $botSettings->receipt_parser_method ?? BotSettings::PARSER_LEGACY;
