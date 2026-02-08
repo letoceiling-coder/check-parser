@@ -3672,7 +3672,7 @@ PYTHON;
     /**
      * Send message to user with Reply Keyboard
      */
-    private function sendMessage(TelegramBot $bot, int $chatId, string $text, bool $withMenu = true): ?array
+    private function sendMessage(TelegramBot $bot, int $chatId, string $text, bool $withMenu = true, ?string $parseMode = 'HTML'): ?array
     {
         try {
             Log::info('Sending message to Telegram', [
@@ -3684,8 +3684,11 @@ PYTHON;
             $params = [
                 'chat_id' => $chatId,
                 'text' => $text,
-                'parse_mode' => 'HTML',
             ];
+            
+            if ($parseMode !== null) {
+                $params['parse_mode'] = $parseMode;
+            }
             
             // Добавляем постоянную клавиатуру если нужно
             if ($withMenu) {
@@ -3968,7 +3971,7 @@ PYTHON;
             . "/check-reset - сбросить проверку уникальности\n"
             . "/exit - выйти из режима тестирования";
         
-        $this->sendMessage($bot, $chatId, $message, parseMode: 'HTML');
+        $this->sendMessage($bot, $chatId, $message, true, 'HTML');
         
         Log::info('Test mode activated', [
             'bot_id' => $bot->id,
@@ -4126,7 +4129,7 @@ PYTHON;
             // Format response
             $response = $this->formatTestModeResponse($checkData, $isDuplicate, $duplicateCheck, $fileName, $parserMethod);
             
-            $this->sendMessage($bot, $chatId, $response, parseMode: 'HTML');
+            $this->sendMessage($bot, $chatId, $response, true, 'HTML');
             
             // Clean up
             Storage::disk('local')->delete($filePath);
