@@ -161,6 +161,35 @@ function Checks() {
     fetchChecks(1);
   };
 
+  const handleReparseFailed = async () => {
+    setReparseFailedMessage(null);
+    setReparseFailedLoading(true);
+    const token = localStorage.getItem('token');
+    try {
+      const response = await fetch(`${API_URL}/api/checks/reparse-failed`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Accept': 'application/json',
+          'Content-Type': 'application/json',
+        },
+      });
+      const data = await response.json();
+      if (response.ok && data.success) {
+        setReparseFailedMessage(data.message || `Обработано: ${data.processed}, успешно: ${data.success_count}`);
+        fetchChecks(currentPage);
+        fetchStats();
+        setTimeout(() => setReparseFailedMessage(null), 8000);
+      } else {
+        setReparseFailedMessage(data.message || 'Ошибка при переобработке');
+      }
+    } catch (err) {
+      setReparseFailedMessage('Ошибка сети: ' + err.message);
+    } finally {
+      setReparseFailedLoading(false);
+    }
+  };
+
   const formatDate = (dateString) => {
     if (!dateString) return '—';
     const date = new Date(dateString);
