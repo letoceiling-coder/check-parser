@@ -1,0 +1,11 @@
+# Google Sheets Integration
+# Добавьте эти строки в ваш .env файл
+
+# Путь к JSON-файлу с ключом Service Account
+GOOGLE_APPLICATION_CREDENTIALS=storage/app/google/service-account.json
+
+# Включить/выключить интеграцию (true/false)
+GOOGLE_SHEETS_ENABLED=true
+
+# После изменения .env выполните:
+# php artisan config:cache

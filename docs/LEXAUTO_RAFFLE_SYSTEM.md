@@ -802,6 +802,263 @@ if ($order->isExpired()) {
 
 ---
 
+## Интеграция с Google Sheets
+
+### Обзор
+
+При одобрении заказа администратором данные автоматически записываются в Google Таблицу:
+
+| ID заказа | ФИО | Телефон | Сумма | Номера | Дата |
+|-----------|-----|---------|-------|--------|------|
+| 123 | Иванов И.И. | +79991234567 | 20000 | 55, 56 | 04.02.2026 15:30 |
+
+Это позволяет:
+- Вести учет участников в удобном формате
+- Делиться данными с другими системами (CRM, 1C)
+- Экспортировать в CSV/Excel для анализа
+- Создавать сводные таблицы и графики
+
+### Настройка
+
+**Полная инструкция:** `docs/GOOGLE_SHEETS_SETUP.md` (пошагово с скриншотами)
+
+**Краткий чеклист:**
+
+1. ✅ **Создать проект в Google Cloud Console**
+   - Перейти: https://console.cloud.google.com/
+   - Создать новый проект (например: `lexauto-raffle-bot`)
+
+2. ✅ **Включить Google Sheets API**
+   - В проекте: APIs & Services → Library
+   - Найти "Google Sheets API" → Enable
+
+3. ✅ **Создать Service Account**
+   - APIs & Services → Credentials → Create Credentials → Service account
+   - Название: `lexauto-sheets-writer`
+   - Роль: Editor (или пропустить)
+
+4. ✅ **Скачать JSON-ключ**
+   - Открыть созданный Service Account → Keys → Add Key → JSON
+   - Скачается файл типа `project-id-123456.json`
+   - Переименовать в `service-account.json`
+
+5. ✅ **Положить ключ на сервер**
+   ```bash
+   mkdir -p storage/app/google
+   cp service-account.json storage/app/google/
+   chmod 600 storage/app/google/service-account.json
+   ```
+
+6. ✅ **Настроить .env**
+   ```env
+   GOOGLE_APPLICATION_CREDENTIALS=storage/app/google/service-account.json
+   GOOGLE_SHEETS_ENABLED=true
+   ```
+   
+   Затем: `php artisan config:cache`
+
+7. ✅ **Создать Google Таблицу**
+   - Перейти: https://sheets.google.com/
+   - Создать новую таблицу
+   - Назвать: `LEXAUTO Розыгрыш - Участники`
+
+8. ✅ **Дать доступ Service Account**
+   - В таблице: кнопка "Настройки доступа" (Share)
+   - Добавить email Service Account (из JSON-файла `client_email`)
+   - Роль: **Редактор**
+   - ⚠️ Снять галочку "Отправить уведомления"
+
+9. ✅ **Настроить в админке бота**
+   - Перейти: https://auto.siteaccess.ru/bot-settings
+   - Найти поле "Google Sheet URL"
+   - Вставить полную ссылку на таблицу
+   - Сохранить
+
+10. ✅ **Тестирование**
+    ```bash
+    # Проверка подключения и прав доступа
+    php artisan sheets:test
+    
+    # Инициализация заголовков
+    php artisan sheets:init-headers
+    ```
+
+### Использование
+
+#### Автоматическая запись при одобрении
+
+Когда админ одобряет заказ, данные автоматически записываются в таблицу:
+
+```php
+// В TelegramWebhookController::handleOrderApprove()
+private function writeOrderToGoogleSheets(Order $order): void
+{
+    $service = new GoogleSheetsService();
+    $service->writeOrder($order); // Автоматическая запись
+}
+```
+
+**Записываемые данные:**
+- ID заказа
+- ФИО (расшифрованный)
+- Телефон (расшифрованный)
+- Сумма
+- Номера билетов (через запятую)
+- Дата одобрения
+
+#### Ручная запись (если нужно)
+
+```php
+use App\Services\GoogleSheetsService;
+use App\Models\Order;
+
+$order = Order::find(123);
+$service = new GoogleSheetsService();
+
+// Записать один заказ
+$service->writeOrder($order);
+
+// Записать несколько заказов (bulk)
+$orders = Order::where('status', 'sold')->get()->toArray();
+$result = $service->writeOrders($orders);
+// ['success' => 10, 'failed' => 0]
+```
+
+#### Чтение данных из таблицы
+
+```php
+$service = new GoogleSheetsService();
+$sheetId = '1AbC2DeFgH3iJkLmN4oPqR5sTuVwXyZ'; // ID таблицы
+
+// Получить все записи
+$records = $service->getAllRecords($sheetId);
+foreach ($records as $row) {
+    echo "ID: {$row[0]}, ФИО: {$row[1]}, Телефон: {$row[2]}\n";
+}
+```
+
+#### Очистка данных
+
+```php
+$service = new GoogleSheetsService();
+$sheetId = '1AbC2DeFgH3iJkLmN4oPqR5sTuVwXyZ';
+
+// Очистить все данные (кроме заголовков)
+$service->clearData($sheetId);
+```
+
+### Artisan команды
+
+#### sheets:test — Тестирование подключения
+
+```bash
+# Проверить подключение для всех ботов
+php artisan sheets:test
+
+# Проверить конкретного бота
+php artisan sheets:test --bot-id=1
+```
+
+**Что проверяет:**
+- ✅ Наличие файла `service-account.json`
+- ✅ Валидность JSON
+- ✅ Инициализация GoogleSheetsService
+- ✅ Доступ к каждой таблице
+- ✅ Чтение заголовков и подсчет записей
+
+#### sheets:init-headers — Инициализация заголовков
+
+```bash
+# Инициализировать заголовки для всех ботов
+php artisan sheets:init-headers
+
+# Для конкретного бота
+php artisan sheets:init-headers --bot-id=1
+```
+
+**Что делает:**
+- Записывает первую строку с заголовками: `| ID заказа | ФИО | Телефон | Сумма | Номера | Дата |`
+
+### Структура таблицы
+
+**Лист:** `Sheet1` (по умолчанию)
+
+**Строка 1 (заголовки):**
+| A | B | C | D | E | F |
+|---|---|---|---|---|---|
+| ID заказа | ФИО | Телефон | Сумма | Номера | Дата |
+
+**Строки 2+ (данные):**
+| A | B | C | D | E | F |
+|---|---|---|---|---|---|
+| 1 | Иванов Иван Иванович | +79991234567 | 10000 | 55 | 04.02.2026 15:30 |
+| 2 | Петров Петр | +79991112233 | 20000 | 56, 57 | 04.02.2026 16:15 |
+
+### Безопасность
+
+⚠️ **ВАЖНО:**
+
+1. **НЕ коммитить** `service-account.json` в Git
+   - Добавлено в `.gitignore`: `/storage/app/google/`
+
+2. **Права на файл:**
+   ```bash
+   chmod 600 storage/app/google/service-account.json
+   ```
+
+3. **Ограничение прав Service Account:**
+   - Не давайте права на уровне проекта (Editor/Owner)
+   - Давайте доступ только на уровне конкретных таблиц (Share)
+
+4. **Если ключ скомпрометирован:**
+   - Удалить ключ в Google Cloud Console
+   - Создать новый
+   - Заменить файл на сервере
+
+### Troubleshooting
+
+#### Ошибка 403: "The caller does not have permission"
+
+**Причина:** Service Account не имеет доступа к таблице.
+
+**Решение:**
+1. Откройте Google Таблицу в браузере
+2. Нажмите "Настройки доступа" (Share)
+3. Добавьте email Service Account (из JSON-файла)
+4. Роль: **Редактор**
+
+#### Ошибка: "Unable to parse the credentials"
+
+**Причина:** Неверный формат JSON-файла.
+
+**Решение:**
+1. Проверьте содержимое: `cat storage/app/google/service-account.json`
+2. Скачайте ключ заново из Google Cloud Console
+
+#### Запись не появляется в таблице
+
+**Проверьте:**
+1. `.env`: `GOOGLE_SHEETS_ENABLED=true`
+2. После изменения `.env`: `php artisan config:cache`
+3. Логи: `tail -f storage/logs/laravel.log | grep Sheets`
+4. Права на файл: `ls -l storage/app/google/service-account.json`
+
+### Дополнительные возможности
+
+**Несколько ботов → несколько таблиц:**
+- Каждый бот может иметь свою таблицу
+- Настройте `google_sheet_url` для каждого бота отдельно
+
+**Разные розыгрыши → разные листы:**
+- Можно создать отдельный лист для каждого розыгрыша
+- Модифицируйте `GoogleSheetsService::writeOrder()` для записи на нужный лист
+
+**Экспорт в другие форматы:**
+- Google Sheets API позволяет экспортировать в CSV, Excel, PDF
+- См. документацию: https://developers.google.com/sheets/api
+
+---
+
 ## FAQ
 
 ### Q: Что произойдет если юзер не отправит чек в течение 30 минут?
@@ -841,7 +1098,18 @@ $order = Order::createWithReservation(
 
 ### Q: Как настроить Google Sheets?
 
-**A:** См. ЭТАП 10 в плане (будет реализовано). Заглушка уже есть в `writeOrderToGoogleSheets()`.
+**A:** Google Sheets интеграция полностью реализована. Подробная инструкция: `docs/GOOGLE_SHEETS_SETUP.md`
+
+**Кратко:**
+1. Создать Service Account в Google Cloud Console
+2. Скачать JSON-ключ и положить в `storage/app/google/service-account.json`
+3. Добавить в `.env`: `GOOGLE_SHEETS_ENABLED=true`
+4. В админке бота указать URL таблицы
+5. Дать Service Account доступ к таблице (Share)
+6. Тестирование: `php artisan sheets:test`
+7. Инициализация: `php artisan sheets:init-headers`
+
+При одобрении заказа данные автоматически записываются в таблицу.
 
 ### Q: Как добавить нового админа?
 
@@ -865,13 +1133,18 @@ LEXAUTO Raffle System v7.0 — полнофункциональная систе
 ✅ Разделение новички/старички  
 ✅ Докупка билетов  
 ✅ Админская панель  
-✅ Интеграция с Google Sheets (готово к подключению)  
+✅ Интеграция с Google Sheets (полностью реализована)  
+
+**Реализовано:**
+- ✅ ЭТАП 1-9: Основная логика Orders (бронь, докупка, FSM)
+- ✅ ЭТАП 10: Google Sheets интеграция (GoogleSheetsService)
+- ✅ ЭТАП 11: Автоматическая очистка (ClearExpiredOrdersCommand)
+- ✅ Документация (LEXAUTO_RAFFLE_SYSTEM.md, GOOGLE_SHEETS_SETUP.md)
 
 **Следующие шаги:**
-1. ЭТАП 10: Реализовать GoogleSheetsService
-2. ЭТАП 12: Создать Web-админку для Orders (React)
-3. Тестирование в production
-4. Мониторинг и оптимизация
+1. ЭТАП 12: Создать Web-админку для Orders (React + API)
+2. ЭТАП 13: Тестирование в production
+3. Мониторинг и оптимизация
 
 **Поддержка:** 
 - GitHub: [репозиторий](https://github.com/letoceiling-coder/check-parser)

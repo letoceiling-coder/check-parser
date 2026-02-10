@@ -54,6 +54,144 @@ In order to ensure that the Laravel community is welcoming to all, please review
 
 If you discover a security vulnerability within Laravel, please send an e-mail to Taylor Otwell via [taylor@laravel.com](mailto:taylor@laravel.com). All security vulnerabilities will be promptly addressed.
 
+## О проекте
+
+**LEXAUTO Raffle Bot v7.0** — система автоматизации розыгрышей с продажей билетов через Telegram.
+
+### Основные возможности
+
+- ✅ **Telegram Bot** с FSM (конечный автомат состояний)
+- ✅ **Бронирование билетов** с таймером (30 минут)
+- ✅ **Защита от race conditions** (транзакции с блокировкой)
+- ✅ **Автоматическая очистка** просроченных броней (cron)
+- ✅ **Разделение новички/старички** (разная логика приветствия)
+- ✅ **Докупка билетов** для существующих участников
+- ✅ **Парсинг чеков** (PDF → сумма, дата) через Tesseract/Yandex Vision
+- ✅ **Админская панель** (React + Laravel API)
+- ✅ **Google Sheets интеграция** (автоматическая запись участников)
+- ✅ **Шифрование персональных данных** (ФИО, телефон)
+
+### Архитектура
+
+**Backend:**
+- Laravel 11
+- PostgreSQL
+- Telegram Bot API
+- Google Sheets API
+
+**Frontend:**
+- React
+- Vite
+- TailwindCSS
+
+### Документация
+
+- 📖 [LEXAUTO_RAFFLE_SYSTEM.md](docs/LEXAUTO_RAFFLE_SYSTEM.md) — полное описание системы
+- 🔧 [GOOGLE_SHEETS_SETUP.md](docs/GOOGLE_SHEETS_SETUP.md) — настройка интеграции с Google Sheets
+- 📝 [PLAN_LEXAUTO_RAFFLE_V7.0.md](docs/PLAN_LEXAUTO_RAFFLE_V7.0.md) — план реализации
+
+### Быстрый старт
+
+#### 1. Установка зависимостей
+
+```bash
+# Backend
+composer install
+
+# Frontend
+cd frontend
+npm install
+npm run build
+cd ..
+```
+
+#### 2. Настройка .env
+
+```bash
+cp .env.example .env
+php artisan key:generate
+```
+
+**Базовые настройки:**
+```env
+DB_CONNECTION=pgsql
+DB_HOST=127.0.0.1
+DB_PORT=5432
+DB_DATABASE=your_database
+DB_USERNAME=your_username
+DB_PASSWORD=your_password
+
+TELEGRAM_BOT_TOKEN=your_bot_token_here
+APP_URL=https://your-domain.com
+```
+
+**Google Sheets (опционально):**
+```env
+GOOGLE_APPLICATION_CREDENTIALS=storage/app/google/service-account.json
+GOOGLE_SHEETS_ENABLED=true
+```
+
+#### 3. Миграции
+
+```bash
+php artisan migrate
+```
+
+#### 4. Настройка Telegram Webhook
+
+```bash
+php artisan telegram:set-webhook
+```
+
+#### 5. Запуск Scheduler (для автоматической очистки броней)
+
+Добавьте в crontab:
+```bash
+* * * * * cd /path/to/project && php artisan schedule:run >> /dev/null 2>&1
+```
+
+### Google Sheets интеграция
+
+При одобрении заказа администратором данные автоматически записываются в Google Таблицу.
+
+**Настройка:**
+
+1. Создайте Service Account в Google Cloud Console
+2. Скачайте JSON-ключ и положите в `storage/app/google/service-account.json`
+3. Добавьте в `.env`: `GOOGLE_SHEETS_ENABLED=true`
+4. В админке бота укажите URL таблицы
+5. Дайте Service Account доступ к таблице (Share → Редактор)
+
+**Тестирование:**
+```bash
+# Проверка подключения
+php artisan sheets:test
+
+# Инициализация заголовков
+php artisan sheets:init-headers
+```
+
+**Подробная инструкция:** [docs/GOOGLE_SHEETS_SETUP.md](docs/GOOGLE_SHEETS_SETUP.md)
+
+### Artisan команды
+
+```bash
+# Очистка просроченных броней (запускается автоматически каждую минуту)
+php artisan orders:clear-expired
+
+# Тестирование Google Sheets
+php artisan sheets:test
+
+# Инициализация заголовков в Google Sheets
+php artisan sheets:init-headers
+
+# Создание пользователя (админ/юзер)
+php artisan user:create
+
+# Деплой проекта
+php artisan deploy
+```
+
 ## Deployment
 
 ### Настройка деплоя

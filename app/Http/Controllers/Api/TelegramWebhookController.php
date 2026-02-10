@@ -5123,24 +5123,15 @@ PYTHON;
     private function writeOrderToGoogleSheets(\App\Models\Order $order): void
     {
         try {
-            $settings = $order->telegramBot->getOrCreateSettings();
-            
-            if (!$settings->google_sheet_url) {
-                Log::info("Google Sheets URL not configured for bot", ['bot_id' => $order->telegram_bot_id]);
-                return;
-            }
-            
-            // TODO: Реализовать через GoogleSheetsService в ЭТАП 10
-            Log::info("Order ready for Google Sheets", [
-                'order_id' => $order->id,
-                'sheet_url' => $settings->google_sheet_url
-            ]);
+            $service = new \App\Services\GoogleSheetsService();
+            $service->writeOrder($order);
             
         } catch (\Exception $e) {
             Log::error("Failed to write order to Google Sheets", [
                 'order_id' => $order->id,
                 'error' => $e->getMessage()
             ]);
+            // Не прерываем процесс, если запись в Sheets не удалась
         }
     }
 }

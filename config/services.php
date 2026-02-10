@@ -35,4 +35,9 @@ return [
         ],
     ],
 
+    'google' => [
+        'credentials_path' => env('GOOGLE_APPLICATION_CREDENTIALS', storage_path('app/google/service-account.json')),
+        'sheets_enabled' => env('GOOGLE_SHEETS_ENABLED', false),
+    ],
+
 ];
