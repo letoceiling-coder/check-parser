@@ -286,46 +286,96 @@ class TelegramWebhookController extends Controller
      */
     private function handleRaffleStart(TelegramBot $bot, BotUser $botUser, int $chatId, BotSettings $settings): void
     {
-        Log::info('Handling raffle /start', ['bot_id' => $bot->id, 'user_id' => $botUser->id]);
+        Log::info('Handling raffle /start (v7)', ['bot_id' => $bot->id, 'user_id' => $botUser->id]);
         
         // Удаляем предыдущее inline сообщение если есть
         if ($botUser->last_bot_message_id) {
             $this->deleteMessage($bot, $chatId, $botUser->last_bot_message_id);
         }
         
-        // Check available slots
-        $availableSlots = $settings->getAvailableSlotsCount();
+        // Получаем текущий розыгрыш
+        $raffle = Raffle::getCurrentForBot($bot->id);
+        if (!$raffle) {
+            $raffle = Raffle::createForBot($bot->id);
+        }
         
+        // Проверка свободных мест
+        $availableSlots = $settings->getAvailableSlotsCount();
+        $userTickets = $botUser->getTicketNumbers();
+        $hasTickets = count($userTickets) > 0;
+        
+        // Отправляем постоянное меню
+        $this->sendMessage($bot, $chatId, "⌨️ Меню активировано", true);
+        
+        // === СЦЕНАРИЙ В: Мест НЕТ (Sold Out) ===
         if ($availableSlots <= 0 || !$settings->is_active) {
-            // No slots available
-            $message = $settings->msg_no_slots ?? "К сожалению, все места уже заняты.\n\nСледите за новостями!";
-            $message = str_replace('{total_slots}', $settings->total_slots, $message);
+            if ($hasTickets) {
+                // Sold Out с билетами
+                $message = $settings->msg_sold_out_with_tickets ?? 
+                    "⛔️ Места закончились!\n\nТы уже в игре, твои номера: {ticket_numbers}. Следи за розыгрышем!";
+                $message = str_replace('{ticket_numbers}', implode(', ', $userTickets), $message);
+            } else {
+                // Sold Out без билетов
+                $message = $settings->msg_sold_out_no_tickets ?? 
+                    "⛔️ К сожалению, все места уже заняты.\n\nЕсли кто-то не оплатит бронь, место освободится. Следи за новостями.";
+            }
             
-            // Отправляем с постоянной клавиатурой (без inline кнопок)
-            $this->sendMessage($bot, $chatId, $message, true);
+            $this->sendMessage($bot, $chatId, $message);
             $botUser->update(['fsm_state' => BotUser::STATE_IDLE, 'last_bot_message_id' => null]);
             return;
         }
         
-        // Отправляем сначала сообщение с постоянной клавиатурой
-        $this->sendMessage($bot, $chatId, "⌨️ Меню активировано", true);
+        // === СЦЕНАРИЙ А: Новый пользователь (нет ФИО/телефона) ===
+        if (!$botUser->hasAllPersonalData()) {
+            $message = $settings->msg_welcome_new ?? 
+                "Привет! Рад, что ты решил поучаствовать в нашей движухе! 🤝\n\n" .
+                "Для начала давай познакомимся, чтобы я мог записать тебя в список участников.\n\n" .
+                "Нажми кнопку ниже, чтобы начать регистрацию 👇";
+            
+            $keyboard = [
+                'inline_keyboard' => [
+                    [['text' => '📝 Заполнить анкету', 'callback_data' => 'start_registration']],
+                ]
+            ];
+            
+            $result = $this->sendMessageWithKeyboard($bot, $chatId, $message, $keyboard);
+            
+            if ($result && isset($result['message_id'])) {
+                $botUser->update([
+                    'fsm_state' => BotUser::STATE_WELCOME,
+                    'last_bot_message_id' => $result['message_id']
+                ]);
+            }
+            return;
+        }
         
-        // Show welcome with price
-        $message = $settings->msg_welcome ?? "Добро пожаловать в розыгрыш! 🎉\n\nСтоимость участия: {price} ₽ = 1 номерок\nДоступно мест: {available_slots} из {total_slots}\n\nНажмите \"Участвовать\" чтобы начать!";
-        $message = str_replace('{price}', number_format($settings->slot_price, 0, ',', ' '), $message);
-        $message = str_replace('{available_slots}', $availableSlots, $message);
-        $message = str_replace('{total_slots}', $settings->total_slots, $message);
+        // === СЦЕНАРИЙ Б: Вернувшийся пользователь (есть ФИО/телефон) ===
+        $firstName = $botUser->first_name ?? 'друг';
+        $message = $settings->msg_welcome_returning ?? 
+            "Рад видеть тебя снова, {first_name}! 🤝\n\n" .
+            "Хочешь увеличить шансы и докупить ещё наклеек?\n\n";
         
-        // Inline кнопки для участия
-        $inlineKeyboard = [
+        $message = str_replace('{first_name}', $firstName, $message);
+        
+        if ($hasTickets) {
+            $ticketsStr = implode(', ', $userTickets);
+            $message = str_replace('{ticket_numbers}', $ticketsStr, $message);
+            if (strpos($message, '{ticket_numbers}') === false) {
+                $message .= "Твои текущие номера: {$ticketsStr}\n\n";
+            }
+        }
+        
+        $message .= "Нажми кнопку, чтобы оформить новую заявку 👇";
+        
+        $buttonText = $hasTickets ? '🎯 Купить ещё' : '🎯 Купить билеты';
+        $keyboard = [
             'inline_keyboard' => [
-                [['text' => '🎉 Участвовать', 'callback_data' => 'participate']],
+                [['text' => $buttonText, 'callback_data' => 'buy_tickets']],
             ]
         ];
         
-        $result = $this->sendMessageWithKeyboard($bot, $chatId, $message, $inlineKeyboard);
+        $result = $this->sendMessageWithKeyboard($bot, $chatId, $message, $keyboard);
         
-        // Save message ID for editing
         if ($result && isset($result['message_id'])) {
             $botUser->update([
                 'fsm_state' => BotUser::STATE_WELCOME,
@@ -434,12 +484,109 @@ class TelegramWebhookController extends Controller
                     $phone = preg_replace('/[^0-9+]/', '', $text);
                     if (strlen($phone) >= 10) {
                         $botUser->phone_encrypted = encrypt($phone);
-                        $botUser->fsm_state = BotUser::STATE_CONFIRM_DATA;
                         $botUser->save();
-                        $this->showConfirmData($bot, $botUser, $chatId, $settings);
+                        
+                        // После регистрации сразу переходим к выбору количества
+                        $this->sendMessage($bot, $chatId, "✅ Отлично! Теперь выберите количество билетов:");
+                        $this->handleAskQuantity($bot, $botUser, $chatId, $settings);
                     } else {
                         $this->sendMessage($bot, $chatId, "❌ Неверный формат телефона. Введите номер в формате +7XXXXXXXXXX:");
                     }
+                }
+                break;
+            
+            case BotUser::STATE_ASK_QUANTITY:
+                // Обработка ввода количества вручную
+                if ($text && is_numeric($text)) {
+                    $quantity = (int) $text;
+                    
+                    if ($quantity <= 0) {
+                        $this->sendMessage($bot, $chatId, "⚠️ Количество должно быть больше 0. Попробуйте снова:");
+                        return;
+                    }
+                    
+                    $availableSlots = $settings->getAvailableSlotsCount();
+                    if ($quantity > $availableSlots) {
+                        $msg = $settings->msg_insufficient_slots ?? 
+                            "⚠️ Вы хотите {requested}, но осталось всего {available}.\n\nВведите другое число:";
+                        $msg = str_replace('{requested}', $quantity, $msg);
+                        $msg = str_replace('{available}', $availableSlots, $msg);
+                        $this->sendMessage($bot, $chatId, $msg);
+                        return;
+                    }
+                    
+                    // Рассчитываем сумму
+                    $amount = $quantity * $settings->slot_price;
+                    
+                    // Сохраняем данные
+                    $botUser->setData([
+                        'order_quantity' => $quantity,
+                        'order_amount' => $amount
+                    ]);
+                    $botUser->setState(BotUser::STATE_CONFIRM_ORDER);
+                    
+                    // Показываем подтверждение
+                    $message = $settings->msg_confirm_order ?? 
+                        "✅ Заявка сформирована!\n\n" .
+                        "📦 Количество: {quantity} шт.\n" .
+                        "💰 К оплате: {amount} руб.\n\n" .
+                        "Подтверждаете заказ?";
+                    
+                    $message = str_replace('{quantity}', $quantity, $message);
+                    $message = str_replace('{amount}', number_format($amount, 0, '', ' '), $message);
+                    
+                    $keyboard = [
+                        'inline_keyboard' => [
+                            [['text' => '✅ Подтвердить', 'callback_data' => 'confirm_order']],
+                            [['text' => '❌ Отменить', 'callback_data' => 'cancel_order']],
+                        ]
+                    ];
+                    
+                    $result = $this->sendMessageWithKeyboard($bot, $chatId, $message, $keyboard);
+                    
+                    if ($result && isset($result['message_id'])) {
+                        $botUser->update(['last_bot_message_id' => $result['message_id']]);
+                    }
+                } else {
+                    $this->sendMessage($bot, $chatId, "⚠️ Введите количество числом (например: 5)");
+                }
+                break;
+            
+            case BotUser::STATE_WAIT_CHECK_FOR_ORDER:
+                // Ожидание чека для заказа
+                if ($photo || ($document && !$this->isPdfDocument($document))) {
+                    $this->sendMessage($bot, $chatId, '⚠️ Принимаются только PDF-файлы. Загрузите чек в формате PDF.');
+                } elseif ($document && $this->isPdfDocument($document)) {
+                    $orderId = $botUser->getFsmDataValue('current_order_id');
+                    
+                    if (!$orderId) {
+                        $this->sendMessage($bot, $chatId, "⚠️ Заказ не найден. Начните заново с /start");
+                        return;
+                    }
+                    
+                    $order = \App\Models\Order::find($orderId);
+                    
+                    if (!$order || $order->bot_user_id != $botUser->id) {
+                        $this->sendMessage($bot, $chatId, "⚠️ Заказ не найден. Начните заново с /start");
+                        return;
+                    }
+                    
+                    // Проверка, не истекла ли бронь
+                    if ($order->isExpired()) {
+                        $order->cancelReservation();
+                        $botUser->resetState();
+                        
+                        $message = $settings->msg_order_expired ?? 
+                            "⏰ Время брони истекло!\n\nЗаказ отменён. Места освобождены.\n\nВы можете оформить новую заявку, нажав /start";
+                        
+                        $this->sendMessage($bot, $chatId, $message);
+                        return;
+                    }
+                    
+                    // Обрабатываем чек для заказа
+                    $this->handleCheckForOrder($bot, $botUser, $chatId, $document, $order, $settings);
+                } elseif ($text) {
+                    $this->sendMessage($bot, $chatId, '📄 Пожалуйста, отправьте чек в формате PDF.');
                 }
                 break;
                 
@@ -3364,7 +3511,40 @@ PYTHON;
 
         Log::info('Handling callback query', ['data' => $data, 'user_id' => $telegramUserId]);
 
-        // Обработка кнопок админа (одобрить/отклонить/редактировать) — до проверки режима розыгрыша,
+        // Обработка кнопок админа для ORDERS (новая система v7.0)
+        if (str_starts_with($data, 'order_approve:') || str_starts_with($data, 'order_reject:') || str_starts_with($data, 'order_edit:')) {
+            $from = $callbackQuery['from'] ?? [];
+            $botUser = $this->getOrCreateBotUser($bot, $telegramUserId, [
+                'username' => $from['username'] ?? null,
+                'first_name' => $from['first_name'] ?? null,
+                'last_name' => $from['last_name'] ?? null,
+            ]);
+            
+            if (!$botUser->isAdmin()) {
+                Http::post("https://api.telegram.org/bot{$bot->token}/answerCallbackQuery", [
+                    'callback_query_id' => $callbackQuery['id'],
+                    'text' => '❌ У вас нет прав для этого действия',
+                    'show_alert' => true,
+                ]);
+                return;
+            }
+            
+            $botSettings = BotSettings::where('telegram_bot_id', $bot->id)->first();
+            
+            if (str_starts_with($data, 'order_approve:')) {
+                $orderId = (int) str_replace('order_approve:', '', $data);
+                $this->handleOrderApprove($bot, $botUser, $chatId, $messageId, $orderId, $botSettings);
+            } elseif (str_starts_with($data, 'order_reject:')) {
+                $orderId = (int) str_replace('order_reject:', '', $data);
+                $this->handleOrderReject($bot, $botUser, $chatId, $messageId, $orderId, $botSettings);
+            } else {
+                $orderId = (int) str_replace('order_edit:', '', $data);
+                $this->handleOrderEdit($bot, $botUser, $chatId, $messageId, $orderId, $botSettings);
+            }
+            return;
+        }
+
+        // Обработка кнопок админа для старой системы (checks без orders)
         // иначе при выключенном розыгрыше клик ничего не делает
         if (str_starts_with($data, 'admin_approve_') || str_starts_with($data, 'admin_reject_') || str_starts_with($data, 'admin_edit_')) {
             $callbackMessage = $callbackQuery['message'] ?? [];
@@ -3408,6 +3588,19 @@ PYTHON;
             return;
         }
 
+        // Обработка callback'ов с параметрами
+        if (str_starts_with($data, 'quantity:')) {
+            $quantity = (int) str_replace('quantity:', '', $data);
+            $this->handleQuantitySelected($bot, $botUser, $chatId, $messageId, $quantity, $botSettings);
+            return;
+        }
+        
+        if (str_starts_with($data, 'cancel_order:')) {
+            $orderId = (int) str_replace('cancel_order:', '', $data);
+            $this->handleCancelOrder($bot, $botUser, $chatId, $messageId, $orderId);
+            return;
+        }
+
         // Handle navigation
         switch ($data) {
             case 'cancel':
@@ -3430,6 +3623,49 @@ PYTHON;
                 $keyboard = $this->getBackCancelKeyboard();
                 $this->editMessageText($bot, $chatId, $messageId, $msg, $keyboard);
                 $botUser->update(['last_bot_message_id' => $messageId]);
+                return;
+            
+            // === НОВЫЕ CALLBACK'Ы ДЛЯ ORDERS ===
+            
+            case 'start_registration':
+                // Начать регистрацию (новый пользователь)
+                $this->deleteMessage($bot, $chatId, $messageId);
+                $botUser->setState(BotUser::STATE_WAIT_FIO);
+                $msg = $botSettings->msg_ask_fio ?? "📝 Напиши своё ФИО полностью (например: Иванов Иван Иванович):";
+                $this->sendMessage($bot, $chatId, $msg);
+                return;
+            
+            case 'buy_tickets':
+                // Купить билеты (новый или вернувшийся пользователь)
+                $this->deleteMessage($bot, $chatId, $messageId);
+                $this->handleAskQuantity($bot, $botUser, $chatId, $botSettings);
+                return;
+            
+            case 'quantity_custom':
+                // Пользователь хочет ввести число вручную
+                $this->deleteMessage($bot, $chatId, $messageId);
+                $botUser->setState(BotUser::STATE_ASK_QUANTITY);
+                $msg = $botSettings->msg_ask_quantity ?? 
+                    "Стоимость одной наклейки: {price} руб.\n\nВведите количество наклеек, которые хотите приобрести (цифрой):";
+                $msg = str_replace('{price}', number_format($botSettings->slot_price, 0, '', ' '), $msg);
+                $this->sendMessage($bot, $chatId, $msg);
+                return;
+            
+            case 'confirm_order':
+                // Подтвердить заказ и забронировать
+                $this->handleConfirmOrder($bot, $botUser, $chatId, $messageId, $botSettings);
+                return;
+            
+            case 'cancel_order':
+                // Отменить заказ (из подтверждения или из брони)
+                if (str_contains($data, ':')) {
+                    $orderId = (int) explode(':', $data)[1];
+                    $this->handleCancelOrder($bot, $botUser, $chatId, $messageId, $orderId);
+                } else {
+                    $this->deleteMessage($bot, $chatId, $messageId);
+                    $botUser->resetState();
+                    $this->sendMessage($bot, $chatId, "❌ Заказ отменён.\n\nИспользуйте меню для навигации.");
+                }
                 return;
 
             case 'confirm_data':
@@ -4326,5 +4562,585 @@ PYTHON;
             BotSettings::PARSER_ENHANCED_AI => 'Интеллектуальный (AI)',
             default => $method,
         };
+    }
+
+    // ==========================================
+    // МЕТОДЫ ДЛЯ РАБОТЫ С ORDERS (НОВАЯ СИСТЕМА LEXAUTO v7.0)
+    // ==========================================
+
+    /**
+     * Запросить количество билетов
+     */
+    private function handleAskQuantity(TelegramBot $bot, BotUser $botUser, int $chatId, BotSettings $settings): void
+    {
+        $botUser->setState(BotUser::STATE_ASK_QUANTITY);
+        
+        $availableSlots = $settings->getAvailableSlotsCount();
+        
+        $message = $settings->msg_ask_quantity ?? 
+            "Стоимость одной наклейки: {price} руб.\n\n" .
+            "Доступно мест: {available_slots}\n\n" .
+            "Выберите количество или введите число:";
+        
+        $message = str_replace('{price}', number_format($settings->slot_price, 0, '', ' '), $message);
+        $message = str_replace('{available_slots}', $availableSlots, $message);
+        
+        // Кнопки быстрого выбора
+        $buttons = [];
+        $quickOptions = [1, 2, 5, 10];
+        $row = [];
+        foreach ($quickOptions as $qty) {
+            if ($qty <= $availableSlots) {
+                $row[] = ['text' => "{$qty} шт.", 'callback_data' => 'quantity:' . $qty];
+            }
+        }
+        if (!empty($row)) {
+            $buttons[] = $row;
+        }
+        
+        $buttons[] = [['text' => '✏️ Ввести число', 'callback_data' => 'quantity_custom']];
+        $buttons[] = [['text' => '❌ Отмена', 'callback_data' => 'cancel']];
+        
+        $keyboard = ['inline_keyboard' => $buttons];
+        
+        $result = $this->sendMessageWithKeyboard($bot, $chatId, $message, $keyboard);
+        
+        if ($result && isset($result['message_id'])) {
+            $botUser->update(['last_bot_message_id' => $result['message_id']]);
+        }
+    }
+
+    /**
+     * Обработка выбранного количества
+     */
+    private function handleQuantitySelected(
+        TelegramBot $bot, 
+        BotUser $botUser, 
+        int $chatId, 
+        int $messageId,
+        int $quantity, 
+        BotSettings $settings
+    ): void {
+        // Валидация
+        if ($quantity <= 0) {
+            return;
+        }
+        
+        $availableSlots = $settings->getAvailableSlotsCount();
+        if ($quantity > $availableSlots) {
+            $msg = $settings->msg_insufficient_slots ?? 
+                "⚠️ Вы хотите {requested}, но осталось всего {available}.\n\nВыберите другое количество:";
+            $msg = str_replace('{requested}', $quantity, $msg);
+            $msg = str_replace('{available}', $availableSlots, $msg);
+            
+            $keyboard = $this->getBackCancelKeyboard();
+            $this->editMessageText($bot, $chatId, $messageId, $msg, $keyboard);
+            return;
+        }
+        
+        // Рассчитываем сумму
+        $amount = $quantity * $settings->slot_price;
+        
+        // Сохраняем данные в FSM
+        $botUser->fsm_data = array_merge($botUser->fsm_data ?? [], [
+            'order_quantity' => $quantity,
+            'order_amount' => $amount
+        ]);
+        $botUser->fsm_state = BotUser::STATE_CONFIRM_ORDER;
+        $botUser->save();
+        
+        // Сообщение с подтверждением
+        $message = $settings->msg_confirm_order ?? 
+            "✅ Заявка сформирована!\n\n" .
+            "📦 Количество: {quantity} шт.\n" .
+            "💰 К оплате: {amount} руб.\n\n" .
+            "Подтверждаете заказ?";
+        
+        $message = str_replace('{quantity}', $quantity, $message);
+        $message = str_replace('{amount}', number_format($amount, 0, '', ' '), $message);
+        
+        $keyboard = [
+            'inline_keyboard' => [
+                [['text' => '✅ Подтвердить', 'callback_data' => 'confirm_order']],
+                [['text' => '❌ Отменить', 'callback_data' => 'cancel_order']],
+            ]
+        ];
+        
+        $this->editMessageText($bot, $chatId, $messageId, $message, $keyboard);
+    }
+
+    /**
+     * Подтвердить заказ и забронировать билеты
+     */
+    private function handleConfirmOrder(
+        TelegramBot $bot, 
+        BotUser $botUser, 
+        int $chatId, 
+        int $messageId,
+        BotSettings $settings
+    ): void {
+        $quantity = $botUser->getFsmDataValue('order_quantity');
+        $amount = $botUser->getFsmDataValue('order_amount');
+        
+        if (!$quantity || !$amount) {
+            $this->editMessageText($bot, $chatId, $messageId, "⚠️ Ошибка: данные заказа не найдены. Начните заново.");
+            $botUser->resetState();
+            return;
+        }
+        
+        // Удаляем inline кнопки
+        $this->deleteMessage($bot, $chatId, $messageId);
+        
+        // Создаем заказ с бронированием (транзакция внутри Order::createWithReservation)
+        $raffle = Raffle::getCurrentForBot($bot->id);
+        if (!$raffle) {
+            $this->sendMessage($bot, $chatId, "⚠️ Ошибка: активный розыгрыш не найден. Обратитесь к администратору.");
+            return;
+        }
+        
+        $order = \App\Models\Order::createWithReservation(
+            $bot->id,
+            $raffle->id,
+            $botUser->id,
+            $quantity,
+            $amount,
+            30 // 30 минут брони
+        );
+        
+        if (!$order) {
+            $this->sendMessage($bot, $chatId, "⚠️ Не удалось забронировать билеты. Возможно, места уже заняты. Попробуйте снова.");
+            $botUser->resetState();
+            return;
+        }
+        
+        // Сохраняем order_id в FSM
+        $botUser->fsm_data = array_merge($botUser->fsm_data ?? [], ['current_order_id' => $order->id]);
+        $botUser->fsm_state = BotUser::STATE_ORDER_RESERVED;
+        $botUser->save();
+        
+        // Отправляем инструкции по оплате
+        $this->sendOrderInstructions($bot, $botUser, $chatId, $settings, $order);
+        
+        Log::info("Order created and reserved", [
+            'order_id' => $order->id,
+            'user_id' => $botUser->id,
+            'quantity' => $quantity,
+            'amount' => $amount
+        ]);
+    }
+
+    /**
+     * Отправить инструкции по оплате с QR-кодом
+     */
+    private function sendOrderInstructions(
+        TelegramBot $bot, 
+        BotUser $botUser, 
+        int $chatId, 
+        BotSettings $settings,
+        \App\Models\Order $order
+    ): void {
+        $message = $settings->msg_order_reserved ?? 
+            "✅ Заявка сформирована! Бронь на 30 минут.\n\n" .
+            "📦 Количество: {quantity} шт.\n" .
+            "💰 К оплате: {amount} руб.\n\n" .
+            "👇 Реквизиты для оплаты:";
+        
+        $message = str_replace('{quantity}', $order->quantity, $message);
+        $message = str_replace('{amount}', number_format($order->amount, 0, '', ' '), $message);
+        
+        // Отправка QR-кода
+        if ($settings->qr_image_path) {
+            $qrPath = $settings->getQrImageFullPath();
+            if ($qrPath && file_exists($qrPath)) {
+                $this->sendPhoto($bot, $chatId, $qrPath, $message);
+            } else {
+                $this->sendMessage($bot, $chatId, $message);
+            }
+        } else {
+            $this->sendMessage($bot, $chatId, $message);
+        }
+        
+        // Инструкции
+        $instructions = $settings->msg_payment_instructions ?? 
+            "⚠️ ВНИМАНИЕ! ОЧЕНЬ ВАЖНО:\n\n" .
+            "1️⃣ Оплачивайте сумму СТРОГО ОДНИМ ПЛАТЕЖОМ. Не разбивайте оплату на части!\n" .
+            "2️⃣ В назначении платежа укажите: «Оплата наклейки».\n" .
+            "3️⃣ Мы принимаем чек только в формате PDF (выгрузка из банка).\n\n" .
+            "📄 Пришли мне чек в формате PDF-ФАЙЛА в ответ на это сообщение!";
+        
+        $instructions .= "\n\n⏰ Время брони: до " . $order->reserved_until->format('H:i d.m.Y');
+        
+        $keyboard = [
+            'inline_keyboard' => [
+                [['text' => '❌ Отменить заказ', 'callback_data' => 'cancel_order:' . $order->id]],
+            ]
+        ];
+        
+        $this->sendMessageWithKeyboard($bot, $chatId, $instructions, $keyboard);
+        
+        // Переводим в ожидание чека
+        $botUser->fsm_state = BotUser::STATE_WAIT_CHECK_FOR_ORDER;
+        $botUser->save();
+    }
+
+    /**
+     * Отменить заказ
+     */
+    private function handleCancelOrder(
+        TelegramBot $bot, 
+        BotUser $botUser, 
+        int $chatId, 
+        int $messageId,
+        int $orderId
+    ): void {
+        $order = \App\Models\Order::find($orderId);
+        
+        if (!$order || $order->bot_user_id != $botUser->id) {
+            $this->editMessageText($bot, $chatId, $messageId, "⚠️ Заказ не найден.");
+            return;
+        }
+        
+        if ($order->isReserved() || $order->isReview()) {
+            $order->cancelReservation('Отменено пользователем');
+            
+            $this->deleteMessage($bot, $chatId, $messageId);
+            $this->sendMessage($bot, $chatId, "❌ Заказ отменён. Места освобождены.\n\nВы можете оформить новую заявку через /start");
+            
+            $botUser->resetState();
+            
+            Log::info("Order cancelled by user", [
+                'order_id' => $order->id,
+                'user_id' => $botUser->id
+            ]);
+        } else {
+            $this->editMessageText($bot, $chatId, $messageId, "⚠️ Заказ уже обработан и не может быть отменён.");
+        }
+    }
+
+    /**
+     * Обработка чека для заказа
+     */
+    private function handleCheckForOrder(
+        TelegramBot $bot,
+        BotUser $botUser,
+        int $chatId,
+        array $document,
+        \App\Models\Order $order,
+        BotSettings $settings
+    ): void {
+        // Скачиваем файл
+        $filePath = $this->downloadFile($bot, $document['file_id'], 'checks');
+        
+        if (!$filePath) {
+            $this->sendMessage($bot, $chatId, "⚠️ Ошибка загрузки файла. Попробуйте ещё раз.");
+            return;
+        }
+        
+        // Парсим чек
+        $fullPath = storage_path('app/' . $filePath);
+        $checkData = $this->parseCheckFile($fullPath, $settings->receipt_parser_method ?? BotSettings::PARSER_ENHANCED);
+        
+        // Создаём Check
+        $check = Check::create([
+            'telegram_bot_id' => $bot->id,
+            'raffle_id' => $order->raffle_id,
+            'bot_user_id' => $botUser->id,
+            'chat_id' => $chatId,
+            'username' => $botUser->username,
+            'first_name' => $botUser->first_name,
+            'file_path' => $filePath,
+            'file_type' => 'pdf',
+            'file_size' => $document['file_size'] ?? 0,
+            'file_hash' => Check::calculateFileHash($fullPath),
+            'amount' => $checkData['amount'] ?? null,
+            'check_date' => $checkData['date'] ?? null,
+            'ocr_method' => $checkData['ocr_method'] ?? 'unknown',
+            'raw_text' => $checkData['raw_text'] ?? null,
+            'status' => $checkData['status'] ?? 'failed',
+            'amount_found' => !empty($checkData['amount']),
+            'date_found' => !empty($checkData['date']),
+            'review_status' => 'pending',
+            'parsing_confidence' => $checkData['confidence'] ?? null,
+        ]);
+        
+        // Привязываем чек к заказу
+        $order->check_id = $check->id;
+        $order->moveToReview(); // Останавливает таймер, меняет статус на 'review'
+        
+        // Обновляем состояние пользователя
+        $botUser->setState(BotUser::STATE_ORDER_REVIEW);
+        
+        // Уведомление пользователю
+        $message = $settings->msg_check_received ?? 
+            "📄 Чек получен! ✅\n\nСтатус: На проверке у администратора.\n\nМы уведомим вас о результате проверки.";
+        
+        $this->sendMessage($bot, $chatId, $message);
+        
+        // Уведомление админам
+        $this->notifyAdminsAboutNewOrder($bot, $order, $check);
+        
+        Log::info("Check uploaded for order", [
+            'order_id' => $order->id,
+            'check_id' => $check->id,
+            'user_id' => $botUser->id
+        ]);
+    }
+
+    /**
+     * Уведомить админов о новом заказе на проверке
+     */
+    private function notifyAdminsAboutNewOrder(TelegramBot $bot, \App\Models\Order $order, Check $check): void
+    {
+        $admins = BotUser::where('telegram_bot_id', $bot->id)
+            ->where('role', 'admin')
+            ->where('is_blocked', false)
+            ->get();
+        
+        if ($admins->isEmpty()) {
+            Log::warning("No admins found for bot", ['bot_id' => $bot->id]);
+            return;
+        }
+        
+        foreach ($admins as $admin) {
+            try {
+                $message = "🔔 Новая заявка на проверку! (Orders v7.0)\n\n";
+                $message .= "👤 Пользователь: " . ($order->botUser->first_name ?? 'Неизвестен');
+                if ($order->botUser->username) {
+                    $message .= " (@" . $order->botUser->username . ")";
+                }
+                $message .= "\n";
+                $message .= "📱 Телефон: " . ($order->botUser->phone ?? '—') . "\n";
+                $message .= "📦 Количество: {$order->quantity} шт.\n";
+                $message .= "💰 Сумма заказа: " . number_format($order->amount, 0, '', ' ') . " руб.\n\n";
+                
+                $message .= "📄 Чек:\n";
+                $message .= "   • Сумма по чеку: " . ($check->amount ? number_format($check->amount, 2) : '—') . " руб.\n";
+                $message .= "   • Дата: " . ($check->check_date ? $check->check_date->format('d.m.Y H:i') : '—') . "\n";
+                $message .= "   • Статус парсинга: " . $check->status . "\n";
+                
+                if ($check->parsing_confidence) {
+                    $message .= "   • Уверенность: " . round($check->parsing_confidence * 100) . "%\n";
+                }
+                
+                // Отправка чека
+                $checkPath = storage_path('app/' . $check->file_path);
+                if (file_exists($checkPath)) {
+                    $this->sendDocument($bot, $admin->telegram_user_id, $checkPath, $message);
+                } else {
+                    $this->sendMessage($bot, $admin->telegram_user_id, $message . "\n\n⚠️ Файл чека не найден");
+                }
+                
+                // Кнопки управления (используем order_id вместо check_id)
+                $keyboard = [
+                    'inline_keyboard' => [
+                        [
+                            ['text' => '✅ Одобрить', 'callback_data' => 'order_approve:' . $order->id],
+                            ['text' => '❌ Отклонить', 'callback_data' => 'order_reject:' . $order->id],
+                        ],
+                        [
+                            ['text' => '✏️ Редактировать', 'callback_data' => 'order_edit:' . $order->id],
+                        ],
+                    ]
+                ];
+                
+                $this->sendMessageWithKeyboard($bot, $admin->telegram_user_id, "Действия:", $keyboard);
+                
+            } catch (\Exception $e) {
+                Log::error("Failed to notify admin about new order", [
+                    'admin_id' => $admin->id,
+                    'order_id' => $order->id,
+                    'error' => $e->getMessage()
+                ]);
+            }
+        }
+    }
+
+    /**
+     * Одобрить заказ (админ)
+     */
+    private function handleOrderApprove(
+        TelegramBot $bot,
+        BotUser $adminUser,
+        int $chatId,
+        int $messageId,
+        int $orderId,
+        ?BotSettings $settings
+    ): void {
+        $order = \App\Models\Order::with(['botUser', 'check'])->find($orderId);
+        
+        if (!$order) {
+            $this->editMessageText($bot, $chatId, $messageId, "⚠️ Заказ #$orderId не найден");
+            return;
+        }
+        
+        if (!$order->isReview()) {
+            $this->editMessageText($bot, $chatId, $messageId, "⚠️ Заказ уже обработан (статус: {$order->status})");
+            return;
+        }
+        
+        // Одобряем заказ (внутри транзакция)
+        $success = $order->approve($adminUser->id);
+        
+        if (!$success) {
+            $this->editMessageText($bot, $chatId, $messageId, "❌ Ошибка при одобрении заказа. Проверьте логи.");
+            return;
+        }
+        
+        // Уведомление юзеру
+        $message = $settings?->msg_order_approved ??
+            "✅ Платёж подтверждён! 🎉\n\n🎫 Ваши номерки: {ticket_numbers}\n\nУдачи в розыгрыше! 🍀";
+        
+        $ticketsStr = implode(', ', $order->ticket_numbers ?? []);
+        $message = str_replace('{ticket_numbers}', $ticketsStr, $message);
+        
+        $this->sendMessage($bot, $order->botUser->telegram_user_id, $message);
+        
+        // Обновляем состояние юзера
+        $order->botUser->setState(BotUser::STATE_ORDER_SOLD);
+        
+        // Записываем в Google Sheets
+        $this->writeOrderToGoogleSheets($order);
+        
+        // Ответ админу
+        $this->editMessageText($bot, $chatId, $messageId,
+            "✅ Заказ #{$order->id} одобрен\n\n" .
+            "Пользователь: " . $order->botUser->getDisplayName() . "\n" .
+            "Номера: " . $ticketsStr
+        );
+        
+        Log::info("Order approved by admin", [
+            'order_id' => $order->id,
+            'admin_id' => $adminUser->id,
+            'tickets' => $order->ticket_numbers
+        ]);
+    }
+
+    /**
+     * Отклонить заказ (админ)
+     */
+    private function handleOrderReject(
+        TelegramBot $bot,
+        BotUser $adminUser,
+        int $chatId,
+        int $messageId,
+        int $orderId,
+        ?BotSettings $settings
+    ): void {
+        $order = \App\Models\Order::with(['botUser'])->find($orderId);
+        
+        if (!$order) {
+            $this->editMessageText($bot, $chatId, $messageId, "⚠️ Заказ #$orderId не найден");
+            return;
+        }
+        
+        if (!$order->isReview()) {
+            $this->editMessageText($bot, $chatId, $messageId, "⚠️ Заказ уже обработан (статус: {$order->status})");
+            return;
+        }
+        
+        $reason = "Чек не принят администратором";
+        
+        // Отклоняем заказ (внутри транзакция, освобождаются места)
+        $success = $order->reject($adminUser->id, $reason);
+        
+        if (!$success) {
+            $this->editMessageText($bot, $chatId, $messageId, "❌ Ошибка при отклонении заказа. Проверьте логи.");
+            return;
+        }
+        
+        // Уведомление юзеру
+        $message = $settings?->msg_order_rejected ??
+            "❌ Чек не принят.\n\n{reason}\n\nПроверьте оплату и оформите заявку заново через /start";
+        
+        $message = str_replace('{reason}', $reason, $message);
+        
+        $this->sendMessage($bot, $order->botUser->telegram_user_id, $message);
+        
+        // Обновляем состояние юзера
+        $order->botUser->setState(BotUser::STATE_ORDER_REJECTED);
+        
+        // Ответ админу
+        $this->editMessageText($bot, $chatId, $messageId,
+            "❌ Заказ #{$order->id} отклонён\n\n" .
+            "Пользователь: " . $order->botUser->getDisplayName() . "\n" .
+            "Места освобождены"
+        );
+        
+        Log::info("Order rejected by admin", [
+            'order_id' => $order->id,
+            'admin_id' => $adminUser->id
+        ]);
+    }
+
+    /**
+     * Редактировать заказ (админ)
+     */
+    private function handleOrderEdit(
+        TelegramBot $bot,
+        BotUser $adminUser,
+        int $chatId,
+        int $messageId,
+        int $orderId,
+        ?BotSettings $settings
+    ): void {
+        $order = \App\Models\Order::with(['botUser', 'check'])->find($orderId);
+        
+        if (!$order) {
+            $this->editMessageText($bot, $chatId, $messageId, "⚠️ Заказ #$orderId не найден");
+            return;
+        }
+        
+        if (!$order->isReview()) {
+            $this->editMessageText($bot, $chatId, $messageId, "⚠️ Заказ уже обработан (статус: {$order->status})");
+            return;
+        }
+        
+        // Показываем текущие данные и просим ввести новое количество
+        $message = "✏️ Редактирование заказа #{$order->id}\n\n";
+        $message .= "Текущие данные:\n";
+        $message .= "• Количество: {$order->quantity} шт.\n";
+        $message .= "• Сумма: " . number_format($order->amount, 0, '', ' ') . " руб.\n";
+        if ($order->check) {
+            $message .= "• Сумма по чеку: " . ($order->check->amount ? number_format($order->check->amount, 2) : '—') . " руб.\n";
+        }
+        $message .= "\nВведите новое количество билетов:";
+        
+        // Сохраняем order_id в FSM админа для последующей обработки
+        $adminUser->setData(['editing_order_id' => $order->id]);
+        $adminUser->setState(BotUser::STATE_ADMIN_EDIT_AMOUNT);
+        
+        $this->editMessageText($bot, $chatId, $messageId, $message);
+        
+        Log::info("Admin started editing order", [
+            'order_id' => $order->id,
+            'admin_id' => $adminUser->id
+        ]);
+    }
+
+    /**
+     * Записать заказ в Google Sheets
+     */
+    private function writeOrderToGoogleSheets(\App\Models\Order $order): void
+    {
+        try {
+            $settings = $order->telegramBot->getOrCreateSettings();
+            
+            if (!$settings->google_sheet_url) {
+                Log::info("Google Sheets URL not configured for bot", ['bot_id' => $order->telegram_bot_id]);
+                return;
+            }
+            
+            // TODO: Реализовать через GoogleSheetsService в ЭТАП 10
+            Log::info("Order ready for Google Sheets", [
+                'order_id' => $order->id,
+                'sheet_url' => $settings->google_sheet_url
+            ]);
+            
+        } catch (\Exception $e) {
+            Log::error("Failed to write order to Google Sheets", [
+                'order_id' => $order->id,
+                'error' => $e->getMessage()
+            ]);
+        }
     }
 }

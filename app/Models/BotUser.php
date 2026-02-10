@@ -55,6 +55,16 @@ class BotUser extends Model
     public const STATE_APPROVED = 'APPROVED';
     public const STATE_REJECTED = 'REJECTED';
     public const STATE_TEST_MODE = 'TEST_MODE';
+    
+    // Новые состояния для системы Orders
+    public const STATE_ASK_QUANTITY = 'ASK_QUANTITY';                    // Запрос количества билетов
+    public const STATE_CONFIRM_ORDER = 'CONFIRM_ORDER';                  // Подтверждение заказа
+    public const STATE_ORDER_RESERVED = 'ORDER_RESERVED';                // Заказ забронирован
+    public const STATE_WAIT_CHECK_FOR_ORDER = 'WAIT_CHECK_FOR_ORDER';  // Ожидание чека для заказа
+    public const STATE_ORDER_REVIEW = 'ORDER_REVIEW';                    // Заказ на проверке
+    public const STATE_ORDER_SOLD = 'ORDER_SOLD';                        // Заказ одобрен
+    public const STATE_ORDER_REJECTED = 'ORDER_REJECTED';                // Заказ отклонен
+    public const STATE_ORDER_EXPIRED = 'ORDER_EXPIRED';                  // Бронь истекла
 
     // ==========================================
     // Шифрование/расшифровка персональных данных

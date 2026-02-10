@@ -14,6 +14,7 @@ class Ticket extends Model
         'number',
         'bot_user_id',
         'check_id',
+        'order_id',
         'issued_at',
     ];
 
@@ -44,6 +45,11 @@ class Ticket extends Model
     public function raffle(): BelongsTo
     {
         return $this->belongsTo(Raffle::class);
+    }
+
+    public function order(): BelongsTo
+    {
+        return $this->belongsTo(Order::class);
     }
 
     // ==========================================

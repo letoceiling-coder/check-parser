@@ -35,6 +35,16 @@ class BotFSM
     
     // Режим тестирования
     public const STATE_TEST_MODE = 'TEST_MODE';
+    
+    // Новые состояния для системы Orders
+    public const STATE_ASK_QUANTITY = 'ASK_QUANTITY';
+    public const STATE_CONFIRM_ORDER = 'CONFIRM_ORDER';
+    public const STATE_ORDER_RESERVED = 'ORDER_RESERVED';
+    public const STATE_WAIT_CHECK_FOR_ORDER = 'WAIT_CHECK_FOR_ORDER';
+    public const STATE_ORDER_REVIEW = 'ORDER_REVIEW';
+    public const STATE_ORDER_SOLD = 'ORDER_SOLD';
+    public const STATE_ORDER_REJECTED = 'ORDER_REJECTED';
+    public const STATE_ORDER_EXPIRED = 'ORDER_EXPIRED';
 
     // ==========================================
     // Callback data префиксы
@@ -327,6 +337,121 @@ class BotFSM
                 [
                     ['text' => '❌ Отмена', 'callback_data' => self::CB_CANCEL],
                 ],
+            ]
+        ];
+    }
+
+    // ==========================================
+    // Методы для работы с Orders
+    // ==========================================
+
+    /**
+     * Проверить, можно ли забронировать N билетов
+     */
+    public function canReserve(int $quantity): bool
+    {
+        $availableSlots = $this->settings->getAvailableSlotsCount();
+        return $availableSlots >= $quantity && $quantity > 0;
+    }
+
+    /**
+     * Рассчитать сумму заказа
+     */
+    public function calculateOrderAmount(int $quantity): float
+    {
+        return $quantity * $this->settings->slot_price;
+    }
+
+    /**
+     * Получить доступные варианты количества
+     */
+    public function getAvailableQuantityOptions(): array
+    {
+        $availableSlots = $this->settings->getAvailableSlotsCount();
+        $options = [1, 2, 5, 10, 20, 50];
+        
+        return array_filter($options, function($qty) use ($availableSlots) {
+            return $qty <= $availableSlots;
+        });
+    }
+
+    /**
+     * Клавиатура для выбора количества билетов
+     */
+    public function getAskQuantityKeyboard(): array
+    {
+        $availableSlots = $this->settings->getAvailableSlotsCount();
+        
+        $buttons = [];
+        
+        // Быстрый выбор (1, 2, 5, 10) если есть места
+        $quickOptions = [1, 2, 5, 10];
+        $row = [];
+        foreach ($quickOptions as $qty) {
+            if ($qty <= $availableSlots) {
+                $row[] = ['text' => "{$qty} шт.", 'callback_data' => 'quantity:' . $qty];
+            }
+        }
+        if (!empty($row)) {
+            $buttons[] = $row;
+        }
+        
+        // Ввести число
+        $buttons[] = [['text' => '✏️ Ввести число', 'callback_data' => 'quantity_custom']];
+        $buttons[] = [['text' => '❌ Отмена', 'callback_data' => self::CB_CANCEL]];
+        
+        return [
+            'inline_keyboard' => $buttons
+        ];
+    }
+
+    /**
+     * Клавиатура для подтверждения заказа
+     */
+    public function getConfirmOrderKeyboard(): array
+    {
+        return [
+            'inline_keyboard' => [
+                [['text' => '✅ Подтвердить', 'callback_data' => 'confirm_order']],
+                [['text' => '❌ Отменить', 'callback_data' => 'cancel_order']],
+            ]
+        ];
+    }
+
+    /**
+     * Клавиатура для забронированного заказа
+     */
+    public function getOrderReservedKeyboard(int $orderId): array
+    {
+        return [
+            'inline_keyboard' => [
+                [['text' => '❌ Отменить заказ', 'callback_data' => 'cancel_order:' . $orderId]],
+            ]
+        ];
+    }
+
+    /**
+     * Клавиатура для ожидания чека для заказа
+     */
+    public function getWaitCheckForOrderKeyboard(int $orderId): array
+    {
+        return [
+            'inline_keyboard' => [
+                [['text' => '❌ Отменить заказ', 'callback_data' => 'cancel_order:' . $orderId]],
+                [self::getHomeButton()],
+            ]
+        ];
+    }
+
+    /**
+     * Клавиатура для истекшей брони
+     */
+    public function getOrderExpiredKeyboard(): array
+    {
+        return [
+            'inline_keyboard' => [
+                [['text' => '🔄 Попробовать снова', 'callback_data' => 'buy_tickets']],
+                [self::getHomeButton()],
             ]
         ];
     }
