@@ -106,13 +106,26 @@ class DiagnoseRaffleCommand extends Command
             $this->line("Создание {$missing} недостающих билетов...");
             
             $lastNumber = $raffle->tickets()->max('number') ?? 0;
+            
+            // Создаём batch-ом для скорости
+            $tickets = [];
+            $now = now();
             for ($i = 1; $i <= $missing; $i++) {
-                Ticket::create([
+                $tickets[] = [
                     'telegram_bot_id' => $raffle->telegram_bot_id,
                     'raffle_id' => $raffle->id,
                     'number' => $lastNumber + $i,
-                ]);
+                    'created_at' => $now,
+                    'updated_at' => $now,
+                ];
             }
+            
+            // Вставляем по частям (по 100 за раз)
+            $chunks = array_chunk($tickets, 100);
+            foreach ($chunks as $chunk) {
+                Ticket::insert($chunk);
+            }
+            
             $this->info("✅ Создано {$missing} билетов");
         }
         
