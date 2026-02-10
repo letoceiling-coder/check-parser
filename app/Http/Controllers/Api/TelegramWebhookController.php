@@ -4836,10 +4836,26 @@ PYTHON;
             return;
         }
         
-        // Парсим чек
+        // Парсим чек (OCR / pdftotext + ReceiptParser)
         $fullPath = storage_path('app/' . $filePath);
-        $checkData = $this->parseCheckFile($fullPath, $settings->receipt_parser_method ?? BotSettings::PARSER_ENHANCED);
-        
+        $checkData = $this->processCheckWithOCR($filePath, true, $settings->receipt_parser_method ?? BotSettings::PARSER_ENHANCED);
+
+        if (!$checkData) {
+            $checkData = [
+                'amount' => null,
+                'date' => null,
+                'ocr_method' => 'unknown',
+                'raw_text' => null,
+                'status' => 'failed',
+                'parsing_confidence' => null,
+            ];
+        } else {
+            $checkData['raw_text'] = $checkData['raw_text'] ?? null;
+            $checkData['status'] = (!empty($checkData['amount']) && !empty($checkData['date']))
+                ? 'success'
+                : (empty($checkData['amount']) && empty($checkData['date']) ? 'failed' : 'partial');
+        }
+
         // Создаём Check
         $check = Check::create([
             'telegram_bot_id' => $bot->id,
@@ -4860,7 +4876,7 @@ PYTHON;
             'amount_found' => !empty($checkData['amount']),
             'date_found' => !empty($checkData['date']),
             'review_status' => 'pending',
-            'parsing_confidence' => $checkData['confidence'] ?? null,
+            'parsing_confidence' => $checkData['parsing_confidence'] ?? $checkData['confidence'] ?? null,
         ]);
         
         // Привязываем чек к заказу
