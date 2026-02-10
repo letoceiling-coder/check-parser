@@ -132,6 +132,7 @@ function App() {
                   <Route path="/admin-requests" element={<AdminRequests />} />
                   <Route path="/bot-users" element={<BotUsers />} />
                   <Route path="/bot" element={<Bot />} />
+                  <Route path="/google-sheets" element={<GoogleSheetsSettings />} />
                   <Route path="/documentation" element={<Documentation />} />
                   <Route path="/broadcast" element={<Broadcast />} />
                   <Route path="*" element={<Navigate to="/" replace />} />

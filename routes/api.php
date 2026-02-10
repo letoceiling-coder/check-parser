@@ -79,4 +79,10 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/bot/{botId}/raffles/complete', [\App\Http\Controllers\Api\RaffleController::class, 'complete']);
     Route::post('/bot/{botId}/raffles/reset', [\App\Http\Controllers\Api\RaffleController::class, 'reset']);
     Route::post('/bot/{botId}/raffles/cancel', [\App\Http\Controllers\Api\RaffleController::class, 'cancel']);
+    
+    // Google Sheets routes
+    Route::get('/google-sheets/settings', [\App\Http\Controllers\Api\GoogleSheetsController::class, 'getSettings']);
+    Route::post('/google-sheets/toggle', [\App\Http\Controllers\Api\GoogleSheetsController::class, 'toggle']);
+    Route::post('/google-sheets/upload-credentials', [\App\Http\Controllers\Api\GoogleSheetsController::class, 'uploadCredentials']);
+    Route::post('/google-sheets/test', [\App\Http\Controllers\Api\GoogleSheetsController::class, 'test']);
 });
