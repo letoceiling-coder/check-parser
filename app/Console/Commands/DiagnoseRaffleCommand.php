@@ -108,6 +108,7 @@ class DiagnoseRaffleCommand extends Command
             $lastNumber = $raffle->tickets()->max('number') ?? 0;
             for ($i = 1; $i <= $missing; $i++) {
                 Ticket::create([
+                    'telegram_bot_id' => $raffle->telegram_bot_id,
                     'raffle_id' => $raffle->id,
                     'number' => $lastNumber + $i,
                 ]);
