@@ -9,7 +9,7 @@ use Illuminate\Console\Command;
 
 class DiagnoseRaffleCommand extends Command
 {
-    protected $signature = 'raffle:diagnose {raffle_id=1}';
+    protected $signature = 'raffle:diagnose {raffle_id=1} {--fix : Автоматически исправить проблемы}';
     protected $description = 'Диагностика проблем с розыгрышем и билетами';
 
     public function handle(): int
@@ -71,7 +71,7 @@ class DiagnoseRaffleCommand extends Command
             }
             $this->newLine();
             
-            if ($this->confirm('Исправить проблемы автоматически?')) {
+            if ($this->option('fix') || $this->confirm('Исправить проблемы автоматически?')) {
                 $this->fixProblems($raffle);
             }
         } else {
