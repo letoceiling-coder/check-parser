@@ -13,7 +13,7 @@ class DeployCommand extends Command
      *
      * @var string
      */
-    protected $signature = 'deploy';
+    protected $signature = 'deploy {--no-build : Skip frontend build (e.g. on Windows)}';
 
     /**
      * The console command description.
@@ -29,15 +29,19 @@ class DeployCommand extends Command
     {
         $this->info('Starting deployment process...');
 
-        // Step 1: Build React app locally
-        $this->info('Building React application...');
-        $buildResult = Process::path(base_path('frontend'))->timeout(300)->run('npm run build');
-        
-        if (!$buildResult->successful()) {
-            $this->error('Failed to build assets: ' . $buildResult->errorOutput());
-            return Command::FAILURE;
+        // Step 1: Build React app locally (unless --no-build)
+        if (!$this->option('no-build')) {
+            $this->info('Building React application...');
+            $buildResult = Process::path(base_path('frontend'))->timeout(300)->run('npm run build');
+            
+            if (!$buildResult->successful()) {
+                $this->error('Failed to build assets: ' . $buildResult->errorOutput());
+                return Command::FAILURE;
+            }
+            $this->info('Assets built successfully.');
+        } else {
+            $this->warn('Skipping frontend build (--no-build).');
         }
-        $this->info('Assets built successfully.');
 
         // Step 2: Add all changes to git
         $this->info('Adding changes to git...');
