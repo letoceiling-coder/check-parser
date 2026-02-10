@@ -84,10 +84,14 @@ class RaffleSettingsController extends Controller
         $settings->fill($fillable);
         $settings->save();
 
-        // Если изменилось количество мест — уменьшаем лишние или добавляем недостающие
+        // Если изменилось количество мест — синхронизируем Raffle, уменьшаем лишние билеты или добавляем недостающие
         if (isset($validated['total_slots'])) {
             $newTotal = (int) $validated['total_slots'];
             $raffleId = $settings->current_raffle_id;
+            if (!$raffleId) {
+                $raffle = Raffle::getCurrentForBot($bot->id);
+                $raffleId = $raffle?->id;
+            }
             $currentCount = Ticket::where('telegram_bot_id', $bot->id)
                 ->when($raffleId !== null, fn($q) => $q->where('raffle_id', $raffleId), fn($q) => $q->whereNull('raffle_id'))
                 ->count();
@@ -95,6 +99,7 @@ class RaffleSettingsController extends Controller
                 Ticket::reduceToTotal($bot->id, $newTotal, $raffleId);
             }
             Ticket::initializeForBot($bot->id, $newTotal, $raffleId);
+            // Бот показывает «Доступно мест» из Raffle.total_slots - tickets_issued, поэтому обновляем розыгрыш
             if ($raffleId) {
                 Raffle::where('id', $raffleId)->update(['total_slots' => $newTotal]);
             }
