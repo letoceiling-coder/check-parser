@@ -23,8 +23,8 @@
   "scripts": {
     "start": "react-scripts start",
     "build": "cross-env REACT_APP_API_URL=https://auto.siteaccess.ru BUILD_PATH=../public react-scripts build && npm run postbuild",
-    "postbuild": "cp laravel-public/index.php ../public/index.php && cp laravel-public/.htaccess ../public/.htaccess && mv ../public/index.html ../public/admin.html",
-    "postbuild:win": "copy laravel-public\\index.php ..\\public\\index.php && copy laravel-public\\.htaccess ..\\public\\.htaccess && move ..\\public\\index.html ..\\public\\admin.html",
+    "postbuild": "cp laravel-public/index.php ../public/index.php && cp laravel-public/.htaccess ../public/.htaccess",
+    "postbuild:win": "copy laravel-public\\index.php ..\\public\\index.php && copy laravel-public\\.htaccess ..\\public\\.htaccess",
     "test": "react-scripts test",
     "eject": "react-scripts eject"
   },
