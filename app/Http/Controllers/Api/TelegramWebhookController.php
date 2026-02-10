@@ -4878,6 +4878,15 @@ PYTHON;
             }
         }
 
+        // raw_text: приводим к валидному UTF-8 и ограничиваем длину (избегаем ошибки charset в MySQL)
+        $rawText = $checkData['raw_text'] ?? null;
+        if ($rawText !== null && $rawText !== '') {
+            $rawText = mb_convert_encoding($rawText, 'UTF-8', 'UTF-8');
+            if (mb_strlen($rawText, 'UTF-8') > 5000) {
+                $rawText = mb_substr($rawText, 0, 5000, 'UTF-8');
+            }
+        }
+
         try {
             $check = Check::create([
                 'telegram_bot_id' => $bot->id,
@@ -4893,7 +4902,7 @@ PYTHON;
                 'amount' => $checkData['amount'] ?? null,
                 'check_date' => $checkData['date'] ?? null,
                 'ocr_method' => $checkData['ocr_method'] ?? 'unknown',
-                'raw_text' => $checkData['raw_text'] ?? null,
+                'raw_text' => $rawText,
                 'status' => $checkData['status'] ?? 'failed',
                 'amount_found' => !empty($checkData['amount']),
                 'date_found' => !empty($checkData['date']),
