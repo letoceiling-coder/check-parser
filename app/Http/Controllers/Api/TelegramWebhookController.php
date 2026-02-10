@@ -583,7 +583,7 @@ class TelegramWebhookController extends Controller
                         return;
                     }
                     
-                    // Обрабатываем чек для заказа
+                    // Обрабатываем чек для заказа (getFile → download в checks/ → парсинг → создание Check)
                     $this->handleCheckForOrder($bot, $botUser, $chatId, $document, $order, $settings);
                 } elseif ($text) {
                     $this->sendMessage($bot, $chatId, '📄 Пожалуйста, отправьте чек в формате PDF.');
@@ -1322,15 +1322,22 @@ class TelegramWebhookController extends Controller
     }
 
     /**
-     * Download file from Telegram
+     * Download file from Telegram.
+     * @param string $filePath Path from getFile (e.g. documents/file_0.123.pdf) or file_id for backward compat
+     * @param string $subfolder Subfolder under storage/app (e.g. 'checks', 'telegram')
      */
-    private function downloadFile(TelegramBot $bot, string $filePath): ?string
+    private function downloadFile(TelegramBot $bot, string $filePath, string $subfolder = 'telegram'): ?string
     {
         try {
             $url = "https://api.telegram.org/file/bot{$bot->token}/{$filePath}";
             $contents = Http::get($url)->body();
 
-            $localPath = 'telegram/' . basename($filePath);
+            $ext = pathinfo($filePath, PATHINFO_EXTENSION) ?: '';
+            $base = $ext ? basename($filePath) : (basename($filePath) . '.pdf');
+            $localPath = $subfolder . '/' . uniqid('', true) . '_' . preg_replace('/[^a-zA-Z0-9._-]/', '', $base);
+            if ($ext === '' && strpos(strtolower($contents), '%pdf') === 0) {
+                $localPath = $subfolder . '/' . uniqid('', true) . '.pdf';
+            }
             Storage::disk('local')->put($localPath, $contents);
 
             return $localPath;
@@ -1379,11 +1386,11 @@ class TelegramWebhookController extends Controller
             $useEnhanced = in_array($parserMethod, [BotSettings::PARSER_ENHANCED, BotSettings::PARSER_ENHANCED_AI], true);
             $useAiFallback = ($parserMethod === BotSettings::PARSER_ENHANCED_AI);
 
-            // Улучшенный режим + PDF: сначала пробуем извлечь текст без OCR (текстовый PDF)
-            if ($isPdf && $useEnhanced) {
+            // PDF: сначала пробуем pdftotext (работает для текстовых PDF без Imagick/OCR)
+            if ($isPdf) {
                 $textFromPdf = $this->extractTextFromTextPdf($fullPath);
                 if ($textFromPdf !== null && mb_strlen($textFromPdf, 'UTF-8') >= 50) {
-                    $checkData = $this->parsePaymentAmount($textFromPdf, true, $useAiFallback);
+                    $checkData = $this->parsePaymentAmount($textFromPdf, $useEnhanced, $useAiFallback);
                     if ($checkData) {
                         $checkData['ocr_method'] = 'pdftotext';
                         $checkData['text_length'] = mb_strlen($textFromPdf, 'UTF-8');
@@ -1395,7 +1402,7 @@ class TelegramWebhookController extends Controller
                 }
             }
 
-            // Convert PDF to image if needed
+            // Convert PDF to image if needed (для сканов; требует Imagick или pdftoppm)
             if ($isPdf) {
                 $fullPath = $this->convertPdfToImage($fullPath);
                 if (!$fullPath) {
@@ -4828,16 +4835,22 @@ PYTHON;
         \App\Models\Order $order,
         BotSettings $settings
     ): void {
-        // Скачиваем файл
-        $filePath = $this->downloadFile($bot, $document['file_id'], 'checks');
-        
+        // Получаем путь к файлу в Telegram и скачиваем в checks/
+        $fileInfo = $this->getFile($bot, $document['file_id']);
+        if (!$fileInfo || empty($fileInfo['file_path'])) {
+            $this->sendMessage($bot, $chatId, "⚠️ Не удалось получить файл. Попробуйте отправить чек ещё раз.");
+            return;
+        }
+
+        $filePath = $this->downloadFile($bot, $fileInfo['file_path'], 'checks');
         if (!$filePath) {
             $this->sendMessage($bot, $chatId, "⚠️ Ошибка загрузки файла. Попробуйте ещё раз.");
             return;
         }
-        
-        // Парсим чек (OCR / pdftotext + ReceiptParser)
+
         $fullPath = storage_path('app/' . $filePath);
+
+        // Парсим чек (pdftotext или OCR). При ошибке парсинга всё равно принимаем чек на проверку
         $checkData = $this->processCheckWithOCR($filePath, true, $settings->receipt_parser_method ?? BotSettings::PARSER_ENHANCED);
 
         if (!$checkData) {
@@ -4856,50 +4869,61 @@ PYTHON;
                 : (empty($checkData['amount']) && empty($checkData['date']) ? 'failed' : 'partial');
         }
 
-        // Создаём Check
-        $check = Check::create([
-            'telegram_bot_id' => $bot->id,
-            'raffle_id' => $order->raffle_id,
-            'bot_user_id' => $botUser->id,
-            'chat_id' => $chatId,
-            'username' => $botUser->username,
-            'first_name' => $botUser->first_name,
-            'file_path' => $filePath,
-            'file_type' => 'pdf',
-            'file_size' => $document['file_size'] ?? 0,
-            'file_hash' => Check::calculateFileHash($fullPath),
-            'amount' => $checkData['amount'] ?? null,
-            'check_date' => $checkData['date'] ?? null,
-            'ocr_method' => $checkData['ocr_method'] ?? 'unknown',
-            'raw_text' => $checkData['raw_text'] ?? null,
-            'status' => $checkData['status'] ?? 'failed',
-            'amount_found' => !empty($checkData['amount']),
-            'date_found' => !empty($checkData['date']),
-            'review_status' => 'pending',
-            'parsing_confidence' => $checkData['parsing_confidence'] ?? $checkData['confidence'] ?? null,
-        ]);
-        
-        // Привязываем чек к заказу
-        $order->check_id = $check->id;
-        $order->moveToReview(); // Останавливает таймер, меняет статус на 'review'
-        
-        // Обновляем состояние пользователя
-        $botUser->setState(BotUser::STATE_ORDER_REVIEW);
-        
-        // Уведомление пользователю
-        $message = $settings->msg_check_received ?? 
-            "📄 Чек получен! ✅\n\nСтатус: На проверке у администратора.\n\nМы уведомим вас о результате проверки.";
-        
-        $this->sendMessage($bot, $chatId, $message);
-        
-        // Уведомление админам
-        $this->notifyAdminsAboutNewOrder($bot, $order, $check);
-        
-        Log::info("Check uploaded for order", [
-            'order_id' => $order->id,
-            'check_id' => $check->id,
-            'user_id' => $botUser->id
-        ]);
+        $fileHash = '';
+        if (is_file($fullPath) && is_readable($fullPath)) {
+            try {
+                $fileHash = Check::calculateFileHash($fullPath);
+            } catch (\Throwable $e) {
+                Log::warning('Check file hash failed', ['path' => $fullPath, 'error' => $e->getMessage()]);
+            }
+        }
+
+        try {
+            $check = Check::create([
+                'telegram_bot_id' => $bot->id,
+                'raffle_id' => $order->raffle_id,
+                'bot_user_id' => $botUser->id,
+                'chat_id' => $chatId,
+                'username' => $botUser->username,
+                'first_name' => $botUser->first_name,
+                'file_path' => $filePath,
+                'file_type' => 'pdf',
+                'file_size' => $document['file_size'] ?? 0,
+                'file_hash' => $fileHash,
+                'amount' => $checkData['amount'] ?? null,
+                'check_date' => $checkData['date'] ?? null,
+                'ocr_method' => $checkData['ocr_method'] ?? 'unknown',
+                'raw_text' => $checkData['raw_text'] ?? null,
+                'status' => $checkData['status'] ?? 'failed',
+                'amount_found' => !empty($checkData['amount']),
+                'date_found' => !empty($checkData['date']),
+                'review_status' => 'pending',
+                'parsing_confidence' => $checkData['parsing_confidence'] ?? $checkData['confidence'] ?? null,
+            ]);
+
+            $order->check_id = $check->id;
+            $order->moveToReview();
+            $botUser->setState(BotUser::STATE_ORDER_REVIEW);
+
+            $message = $settings->msg_check_received ??
+                "📄 Чек получен! ✅\n\nСтатус: На проверке у администратора.\n\nМы уведомим вас о результате проверки.";
+            $this->sendMessage($bot, $chatId, $message);
+
+            $this->notifyAdminsAboutNewOrder($bot, $order, $check);
+
+            Log::info("Check uploaded for order", [
+                'order_id' => $order->id,
+                'check_id' => $check->id,
+                'user_id' => $botUser->id,
+            ]);
+        } catch (\Throwable $e) {
+            Log::error('handleCheckForOrder failed', [
+                'order_id' => $order->id,
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+            ]);
+            $this->sendMessage($bot, $chatId, "⚠️ Чек принят, но при сохранении произошла ошибка. Мы уже смотрим логи. Ваша заявка зафиксирована — напишите в поддержку, если не получите ответ.");
+        }
     }
 
     /**
