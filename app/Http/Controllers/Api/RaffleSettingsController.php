@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\BotSettings;
+use App\Models\Raffle;
 use App\Models\TelegramBot;
 use App\Models\Ticket;
 use Illuminate\Http\Request;
@@ -83,9 +84,20 @@ class RaffleSettingsController extends Controller
         $settings->fill($fillable);
         $settings->save();
 
-        // Если изменилось количество мест, инициализируем номерки
+        // Если изменилось количество мест — уменьшаем лишние или добавляем недостающие
         if (isset($validated['total_slots'])) {
-            Ticket::initializeForBot($bot->id, $validated['total_slots']);
+            $newTotal = (int) $validated['total_slots'];
+            $raffleId = $settings->current_raffle_id;
+            $currentCount = Ticket::where('telegram_bot_id', $bot->id)
+                ->when($raffleId !== null, fn($q) => $q->where('raffle_id', $raffleId), fn($q) => $q->whereNull('raffle_id'))
+                ->count();
+            if ($newTotal < $currentCount) {
+                Ticket::reduceToTotal($bot->id, $newTotal, $raffleId);
+            }
+            Ticket::initializeForBot($bot->id, $newTotal, $raffleId);
+            if ($raffleId) {
+                Raffle::where('id', $raffleId)->update(['total_slots' => $newTotal]);
+            }
         }
 
         return response()->json([

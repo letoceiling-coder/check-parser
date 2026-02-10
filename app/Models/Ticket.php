@@ -247,6 +247,25 @@ class Ticket extends Model
     }
 
     /**
+     * Уменьшить количество номерков до newTotal: удалить незанятые с number > newTotal.
+     * Вызывается при сохранении настроек, когда пользователь уменьшил «Количество мест».
+     */
+    public static function reduceToTotal(int $telegramBotId, int $newTotal, ?int $raffleId = null): int
+    {
+        $query = self::where('telegram_bot_id', $telegramBotId)
+            ->where('number', '>', $newTotal)
+            ->whereNull('bot_user_id');
+
+        if ($raffleId !== null) {
+            $query->where('raffle_id', $raffleId);
+        } else {
+            $query->whereNull('raffle_id');
+        }
+
+        return $query->delete();
+    }
+
+    /**
      * Получить статистику по номеркам
      */
     public static function getStats(int $telegramBotId): array
