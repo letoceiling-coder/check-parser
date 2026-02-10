@@ -10,6 +10,7 @@ import Tickets from './pages/Tickets';
 import AdminRequests from './pages/AdminRequests';
 import BotUsers from './pages/BotUsers';
 import Raffles from './pages/Raffles';
+import GoogleSheetsSettings from './pages/GoogleSheetsSettings';
 import Documentation from './pages/Documentation';
 import Broadcast from './pages/Broadcast';
 import './App.css';
