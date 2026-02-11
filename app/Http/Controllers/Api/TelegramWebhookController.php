@@ -4972,11 +4972,31 @@ PYTHON;
                 }
                 
                 // Отправка чека
-                $checkPath = storage_path('app/' . $check->file_path);
-                if (file_exists($checkPath)) {
+                $checkPath = null;
+                if ($check->file_path) {
+                    // 1) Нормальный случай: относительный путь на диске local (storage/app/...)
+                    if (\Illuminate\Support\Facades\Storage::disk('local')->exists($check->file_path)) {
+                        $checkPath = \Illuminate\Support\Facades\Storage::disk('local')->path($check->file_path);
+                    }
+                    // 2) Legacy-случай: в базе лежит уже полный путь к файлу
+                    elseif (file_exists($check->file_path)) {
+                        $checkPath = $check->file_path;
+                    }
+                    // 3) Старый формат: относительный путь, но используем storage_path('app/...')
+                    elseif (file_exists(storage_path('app/' . ltrim($check->file_path, '/')))) {
+                        $checkPath = storage_path('app/' . ltrim($check->file_path, '/'));
+                    }
+                }
+
+                if ($checkPath && file_exists($checkPath)) {
                     $this->sendDocument($bot, $admin->telegram_user_id, $checkPath, $message);
                 } else {
-                    $this->sendMessage($bot, $admin->telegram_user_id, $message . "\n\n⚠️ Файл чека не найден");
+                    $this->sendMessage(
+                        $bot,
+                        $admin->telegram_user_id,
+                        $message . "\n\n⚠️ Файл чека не найден в хранилище.\n" .
+                        "Для сравнения откройте чек в админ‑панели (раздел «Чеки»)."
+                    );
                 }
                 
                 // Кнопки управления (используем order_id вместо check_id)
