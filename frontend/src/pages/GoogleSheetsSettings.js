@@ -274,7 +274,10 @@ function GoogleSheetsSettings() {
       <div className="mb-6">
         <h1 className="text-3xl font-bold text-gray-900">Интеграция с Google Sheets</h1>
         <p className="text-gray-600 mt-2">
-          Настройка автоматической записи данных участников розыгрыша в Google Таблицу
+          Настройка подключения и автоматическая запись данных участников розыгрыша в Google Таблицу.
+        </p>
+        <p className="text-gray-500 mt-1 text-sm">
+          Ниже: как получить ключи в Google Cloud, куда загрузить файл и как проверить подключение.
         </p>
       </div>
 

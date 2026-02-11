@@ -17,7 +17,7 @@ function RaffleSettings({ bot }) {
     slots_mode: 'sequential',
     is_active: true,
     receipt_parser_method: 'legacy',
-    payment_description: 'Оплата наклейки',
+    payment_description: 'За наклейку',
     support_contact: '',
     raffle_info: '',
     prize_description: '',

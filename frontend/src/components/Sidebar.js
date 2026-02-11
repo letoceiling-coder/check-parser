@@ -12,7 +12,7 @@ function Sidebar({ isOpen, onToggle, user, onLogout }) {
     { id: 'admin-requests', label: 'Запросы на роли', icon: '👤', path: '/admin-requests' },
     { id: 'bot-users', label: 'Пользователи', icon: '👥', path: '/bot-users' },
     { id: 'bot', label: 'Настройки бота', icon: '🤖', path: '/bot' },
-    { id: 'google-sheets', label: 'Google Sheets', icon: '📊', path: '/google-sheets' },
+    { id: 'google-sheets', label: 'Google Sheets — интеграция', icon: '📊', path: '/google-sheets' },
     { id: 'broadcast', label: 'Рассылка', icon: '📢', path: '/broadcast' },
     { id: 'documentation', label: 'Документация', icon: '📚', path: '/documentation' },
   ];
@@ -58,8 +58,8 @@ function Sidebar({ isOpen, onToggle, user, onLogout }) {
           </div>
         )}
 
-        {/* Menu Items */}
-        <nav className="flex-1 p-4 space-y-2">
+        {/* Menu Items — прокручиваемый блок, чтобы все пункты были доступны */}
+        <nav className="flex-1 min-h-0 p-4 space-y-2 overflow-y-auto">
           {menuItems.map((item) => {
             const isActive = location.pathname === item.path;
             return (

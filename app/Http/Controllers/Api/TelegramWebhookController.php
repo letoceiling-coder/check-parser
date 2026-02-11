@@ -663,7 +663,7 @@ class TelegramWebhookController extends Controller
 
         $msg = $settings->msg_show_qr ?? "Оплатите {price} руб по QR-коду.\n\nНазначение платежа: {payment_description}\n\nПосле оплаты отправьте чек в формате PDF.";
         $msg = str_replace('{price}', number_format($settings->slot_price, 0, ',', ' '), $msg);
-        $msg = str_replace('{payment_description}', $settings->payment_description ?? 'Оплата наклейки', $msg);
+        $msg = str_replace('{payment_description}', $settings->payment_description ?? 'За наклейку', $msg);
 
         if ($botUser->last_bot_message_id) {
             $this->deleteMessage($bot, $chatId, $botUser->last_bot_message_id);
@@ -4771,7 +4771,7 @@ PYTHON;
         $instructions = $settings->msg_payment_instructions ?? 
             "⚠️ ВНИМАНИЕ! ОЧЕНЬ ВАЖНО:\n\n" .
             "1️⃣ Оплачивайте сумму СТРОГО ОДНИМ ПЛАТЕЖОМ. Не разбивайте оплату на части!\n" .
-            "2️⃣ В назначении платежа укажите: «Оплата наклейки».\n" .
+            "2️⃣ В назначении платежа укажите: «За наклейку».\n" .
             "3️⃣ Мы принимаем чек только в формате PDF (выгрузка из банка).\n\n" .
             "📄 Пришли мне чек в формате PDF-ФАЙЛА в ответ на это сообщение!";
         
