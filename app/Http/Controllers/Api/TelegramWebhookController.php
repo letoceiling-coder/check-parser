@@ -5047,10 +5047,11 @@ PYTHON;
             return;
         }
         
-        // Одобряем заказ (внутри транзакция)
-        $success = $order->approve($adminUser->id);
+        // Одобряем заказ (внутри транзакция). reviewed_by — FK на users.id; из бота админ = BotUser, передаём null
+        $success = $order->approve(null);
         
         if (!$success) {
+            Log::warning("Order approve failed in bot", ['order_id' => $orderId, 'admin_bot_user_id' => $adminUser->id]);
             $this->editMessageText($bot, $chatId, $messageId, "❌ Ошибка при одобрении заказа. Проверьте логи.");
             return;
         }
@@ -5077,9 +5078,9 @@ PYTHON;
             "Номера: " . $ticketsStr
         );
         
-        Log::info("Order approved by admin", [
+        Log::info("Order approved by admin (bot)", [
             'order_id' => $order->id,
-            'admin_id' => $adminUser->id,
+            'admin_bot_user_id' => $adminUser->id,
             'tickets' => $order->ticket_numbers
         ]);
     }
@@ -5109,10 +5110,11 @@ PYTHON;
         
         $reason = "Чек не принят администратором";
         
-        // Отклоняем заказ (внутри транзакция, освобождаются места)
-        $success = $order->reject($adminUser->id, $reason);
+        // Отклоняем заказ (внутри транзакция). reviewed_by — FK на users.id; из бота передаём null
+        $success = $order->reject(null, $reason);
         
         if (!$success) {
+            Log::warning("Order reject failed in bot", ['order_id' => $orderId, 'admin_bot_user_id' => $adminUser->id]);
             $this->editMessageText($bot, $chatId, $messageId, "❌ Ошибка при отклонении заказа. Проверьте логи.");
             return;
         }
