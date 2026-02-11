@@ -126,6 +126,16 @@ class BotUser extends Model
     }
 
     /**
+     * Записать/объединить данные FSM (без смены состояния)
+     */
+    public function setFsmData(array $data): self
+    {
+        $this->fsm_data = array_merge($this->fsm_data ?? [], $data);
+        $this->save();
+        return $this;
+    }
+
+    /**
      * Очистить данные FSM
      */
     public function clearFsmData(): self

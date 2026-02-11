@@ -518,8 +518,8 @@ class TelegramWebhookController extends Controller
                     // Рассчитываем сумму
                     $amount = $quantity * $settings->slot_price;
                     
-                    // Сохраняем данные
-                    $botUser->setData([
+                    // Сохраняем данные и переходим к подтверждению
+                    $botUser->setFsmData([
                         'order_quantity' => $quantity,
                         'order_amount' => $amount
                     ]);
@@ -5155,7 +5155,7 @@ PYTHON;
         $message .= "\nВведите новое количество билетов:";
         
         // Сохраняем order_id в FSM админа для последующей обработки
-        $adminUser->setData(['editing_order_id' => $order->id]);
+        $adminUser->setFsmData(['editing_order_id' => $order->id]);
         $adminUser->setState(BotUser::STATE_ADMIN_EDIT_AMOUNT);
         
         $this->editMessageText($bot, $chatId, $messageId, $message);
