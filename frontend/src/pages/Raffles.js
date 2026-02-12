@@ -316,12 +316,11 @@ function Raffles() {
               {raffles.map((raffle) => (
                 <tr 
                   key={raffle.id} 
-                  className={`hover:bg-gray-50 cursor-pointer ${raffle.status === 'active' ? 'bg-green-50' : ''}`}
-                  onClick={() => navigate(`/raffles/${raffle.id}`)}
+                  className={`hover:bg-gray-50 ${raffle.status === 'active' ? 'bg-green-50' : ''}`}
                 >
                   <td
-                    className="px-6 py-4 align-middle"
-                    onMouseDown={(e) => {
+                    className="px-6 py-4 align-middle cursor-pointer"
+                    onClick={(e) => {
                       e.stopPropagation();
                       e.preventDefault();
                       const canActivate = currentRaffle?.id !== raffle.id &&
@@ -329,10 +328,6 @@ function Raffles() {
                         raffle.status !== 'cancelled' &&
                         !activatingRaffleId;
                       if (canActivate) setActiveRaffle(raffle);
-                    }}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      e.preventDefault();
                     }}
                   >
                     <label className="flex items-center gap-1 cursor-pointer">
