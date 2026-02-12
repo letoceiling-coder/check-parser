@@ -132,7 +132,7 @@ function Raffles() {
     setExportingRaffleId(raffle.id);
     try {
       const token = localStorage.getItem('token');
-      const response = await fetch(`${API_URL}/api/bot/${botId}/raffles/${raffle.id}`, {
+      const response = await fetch(`${API_URL}/api/bot/${botId}/raffles/${raffle.id}/export`, {
         headers: {
           'Authorization': `Bearer ${token}`,
           'Accept': 'application/json',
@@ -140,6 +140,8 @@ function Raffles() {
       });
       if (!response.ok) throw new Error('Ошибка загрузки участников');
       const data = await response.json();
+      const raffleId = data.raffle_id ?? raffle.id;
+      const raffleName = data.raffle_name ?? raffle.name ?? `Розыгрыш_${raffle.id}`;
       const participants = data.participants || [];
       const headerRow = ['телефон', 'фамилия имя отчество', 'номерки'];
       const dataRows = participants.map((p) => {
@@ -148,7 +150,8 @@ function Raffles() {
         const numbers = (p.tickets || []).map((t) => t.number).sort((a, b) => a - b).join(', ');
         return [phone, fio, numbers];
       });
-      const wsData = [headerRow, ...dataRows];
+      const titleRow = [`Розыгрыш: ${raffleName} (ID: ${raffleId})`];
+      const wsData = [titleRow, [], headerRow, ...dataRows];
       const xlsxMod = await import('xlsx').catch(() => null);
       const XLSX = xlsxMod?.default || xlsxMod;
       if (!XLSX || !XLSX.utils) {
@@ -157,9 +160,9 @@ function Raffles() {
       }
       const ws = XLSX.utils.aoa_to_sheet(wsData);
       const wb = XLSX.utils.book_new();
-      const safeName = (raffle.name || `Розыгрыш_${raffle.id}`).replace(/[\[\]\\/*?:]/g, '_').slice(0, 31);
+      const safeName = String(raffleName).replace(/[\[\]\\/*?:]/g, '_').slice(0, 31);
       XLSX.utils.book_append_sheet(wb, ws, safeName);
-      XLSX.writeFile(wb, `участники_${safeName}.xlsx`);
+      XLSX.writeFile(wb, `участники_${safeName}_id${raffleId}.xlsx`);
     } catch (err) {
       console.error('Export error:', err);
       setError('Не удалось скачать список участников');

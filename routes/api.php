@@ -76,6 +76,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/bot/{botId}/raffles/current', [\App\Http\Controllers\Api\RaffleController::class, 'current']);
     Route::get('/bot/{botId}/raffles/participants', [\App\Http\Controllers\Api\RaffleController::class, 'getParticipants']);
     Route::get('/bot/{botId}/raffles/{raffleId}', [\App\Http\Controllers\Api\RaffleController::class, 'show']);
+    Route::get('/bot/{botId}/raffles/{raffleId}/export', [\App\Http\Controllers\Api\RaffleController::class, 'exportParticipants']);
     Route::put('/bot/{botId}/raffles/{raffleId}', [\App\Http\Controllers\Api\RaffleController::class, 'update']);
     Route::post('/bot/{botId}/raffles/{raffleId}/activate', [\App\Http\Controllers\Api\RaffleController::class, 'activate']);
     Route::post('/bot/{botId}/raffles/complete', [\App\Http\Controllers\Api\RaffleController::class, 'complete']);

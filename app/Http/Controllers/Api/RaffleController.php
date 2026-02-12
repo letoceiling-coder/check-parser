@@ -96,6 +96,40 @@ class RaffleController extends Controller
     }
 
     /**
+     * GET /api/bot/{botId}/raffles/{raffleId}/export — участники только этого розыгрыша для выгрузки в Excel
+     */
+    public function exportParticipants(Request $request, int $botId, int $raffleId): JsonResponse
+    {
+        $bot = TelegramBot::where('user_id', $request->user()->id)
+            ->where('id', $botId)
+            ->firstOrFail();
+
+        $raffle = Raffle::where('telegram_bot_id', $bot->id)
+            ->where('id', $raffleId)
+            ->firstOrFail();
+
+        $participantsList = $raffle->getParticipants();
+        $participants = $participantsList->map(function ($user) {
+            $fio = self::ensurePlainString($user->fio);
+            if ($fio === '' || $fio === null) {
+                $fio = trim(self::ensurePlainString($user->first_name) . ' ' . self::ensurePlainString($user->last_name)) ?: self::ensurePlainString($user->username) ?: '—';
+            }
+            return [
+                'id' => $user->id,
+                'phone' => self::ensurePlainString($user->phone) ?: '—',
+                'fio' => $fio,
+                'tickets' => $user->tickets->map(fn ($t) => ['id' => $t->id, 'number' => $t->number])->values()->all(),
+            ];
+        })->values()->all();
+
+        return response()->json([
+            'raffle_id' => $raffle->id,
+            'raffle_name' => $raffle->name ?? 'Розыгрыш #' . $raffle->id,
+            'participants' => $participants,
+        ]);
+    }
+
+    /**
      * Обновить розыгрыш (название, количество наклеек/слотов)
      */
     public function update(Request $request, int $botId, int $raffleId): JsonResponse
