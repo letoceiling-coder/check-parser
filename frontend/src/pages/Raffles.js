@@ -319,7 +319,17 @@ function Raffles() {
                   className={`hover:bg-gray-50 cursor-pointer ${raffle.status === 'active' ? 'bg-green-50' : ''}`}
                   onClick={() => navigate(`/raffles/${raffle.id}`)}
                 >
-                  <td className="px-6 py-4" onClick={(e) => e.stopPropagation()}>
+                  <td
+                    className="px-6 py-4 align-middle"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      const canActivate = currentRaffle?.id !== raffle.id &&
+                        raffle.status !== 'completed' &&
+                        raffle.status !== 'cancelled' &&
+                        !activatingRaffleId;
+                      if (canActivate) setActiveRaffle(raffle);
+                    }}
+                  >
                     <label className="flex items-center gap-1 cursor-pointer">
                       <input
                         type="radio"
