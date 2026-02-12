@@ -5007,6 +5007,58 @@ PYTHON;
             }
         }
 
+        // Проверка дубликатов: один и тот же чек нельзя использовать для разных заказов
+        $operationId = null;
+        if (!empty($checkData['raw_text'])) {
+            $operationId = Check::extractOperationId($checkData['raw_text']);
+        }
+        $uniqueKey = Check::generateUniqueKey($checkData['amount'] ?? null, $checkData['date'] ?? null);
+        $duplicateOriginal = Check::findDuplicate($bot->id, $fileHash ?: null, $operationId, $uniqueKey);
+
+        if ($duplicateOriginal) {
+            Log::warning('Duplicate check for order detected', [
+                'order_id' => $order->id,
+                'original_check_id' => $duplicateOriginal->id,
+                'file_hash' => $fileHash,
+                'operation_id' => $operationId,
+                'unique_key' => $uniqueKey,
+            ]);
+            $isAlreadyUsed = $duplicateOriginal->review_status === 'approved'
+                && $duplicateOriginal->tickets()->whereNotNull('bot_user_id')->exists();
+
+            $duplicateCheck = Check::create([
+                'telegram_bot_id' => $bot->id,
+                'raffle_id' => $order->raffle_id,
+                'bot_user_id' => $botUser->id,
+                'chat_id' => $chatId,
+                'username' => $botUser->username,
+                'first_name' => $botUser->first_name,
+                'file_path' => $filePath,
+                'file_type' => 'pdf',
+                'file_size' => $document['file_size'] ?? 0,
+                'file_hash' => $fileHash,
+                'operation_id' => $operationId,
+                'unique_key' => $uniqueKey,
+                'is_duplicate' => true,
+                'original_check_id' => $duplicateOriginal->id,
+                'amount' => $checkData['amount'] ?? null,
+                'check_date' => $checkData['date'] ?? null,
+                'ocr_method' => $checkData['ocr_method'] ?? 'unknown',
+                'raw_text' => $rawText,
+                'review_status' => 'rejected',
+                'status' => $checkData['status'] ?? 'failed',
+                'amount_found' => !empty($checkData['amount']),
+                'date_found' => !empty($checkData['date']),
+            ]);
+            $duplicateMessage = $this->getDuplicateCheckMessage($settings, $duplicateOriginal, $isAlreadyUsed);
+            $this->sendMessage($bot, $chatId, $duplicateMessage);
+            if ($isAlreadyUsed) {
+                $this->notifyAdminsAboutDuplicateCheck($bot, $duplicateCheck, $duplicateOriginal, $botUser);
+            }
+            $this->sendMessage($bot, $chatId, "📌 Отправьте, пожалуйста, другой чек для этого заказа (№{$order->id}).");
+            return;
+        }
+
         try {
             $check = Check::create([
                 'telegram_bot_id' => $bot->id,
