@@ -12,6 +12,8 @@ class Raffle extends Model
     public const STATUS_ACTIVE = 'active';
     public const STATUS_COMPLETED = 'completed';
     public const STATUS_CANCELLED = 'cancelled';
+    /** Приостановлен (был активным, сменили на другой) */
+    public const STATUS_PAUSED = 'paused';
 
     protected $fillable = [
         'telegram_bot_id',
@@ -85,6 +87,11 @@ class Raffle extends Model
     public function scopeCompleted($query)
     {
         return $query->where('status', self::STATUS_COMPLETED);
+    }
+
+    public function scopePaused($query)
+    {
+        return $query->where('status', self::STATUS_PAUSED);
     }
 
     public function scopeForBot($query, int $botId)
@@ -227,6 +234,12 @@ class Raffle extends Model
             'slots_mode' => $settings->slots_mode ?? 'sequential',
             'started_at' => now(),
         ]);
+
+        // Делаем активным только этот розыгрыш — остальные переводим в «приостановлен»
+        self::where('telegram_bot_id', $botId)
+            ->where('id', '!=', $raffle->id)
+            ->where('status', self::STATUS_ACTIVE)
+            ->update(['status' => self::STATUS_PAUSED]);
         
         // Обновляем current_raffle_id в настройках
         if ($settings) {

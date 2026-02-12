@@ -15,6 +15,7 @@ function Raffles() {
   const [saving, setSaving] = useState(false);
   const [editError, setEditError] = useState(null);
   const [exportingRaffleId, setExportingRaffleId] = useState(null);
+  const [activatingRaffleId, setActivatingRaffleId] = useState(null);
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -94,6 +95,7 @@ function Raffles() {
   const getStatusBadge = (status) => {
     const badges = {
       active: { bg: 'bg-green-100', text: 'text-green-800', label: '🟢 Активный' },
+      paused: { bg: 'bg-amber-100', text: 'text-amber-800', label: '⏸ Приостановлен' },
       completed: { bg: 'bg-blue-100', text: 'text-blue-800', label: '✅ Завершён' },
       cancelled: { bg: 'bg-gray-100', text: 'text-gray-800', label: '❌ Отменён' },
     };
@@ -103,6 +105,30 @@ function Raffles() {
         {badge.label}
       </span>
     );
+  };
+
+  const setActiveRaffle = async (raffle, e) => {
+    if (e) e.stopPropagation();
+    if (!botId || activatingRaffleId || raffle.status === 'completed' || raffle.status === 'cancelled') return;
+    if (currentRaffle?.id === raffle.id) return;
+    setActivatingRaffleId(raffle.id);
+    try {
+      const token = localStorage.getItem('token');
+      const response = await fetch(`${API_URL}/api/bot/${botId}/raffles/${raffle.id}/activate`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}`, 'Accept': 'application/json' },
+      });
+      const data = await response.json();
+      if (response.ok) {
+        await fetchRaffles();
+      } else {
+        setError(data.message || 'Не удалось сделать активным');
+      }
+    } catch (err) {
+      setError('Ошибка подключения');
+    } finally {
+      setActivatingRaffleId(null);
+    }
   };
 
   const openEditModal = (raffle, e) => {
@@ -275,6 +301,7 @@ function Raffles() {
           <table className="w-full">
             <thead className="bg-gray-50">
               <tr>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase w-20">Активный</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Название</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Статус</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Участники</th>
@@ -292,6 +319,19 @@ function Raffles() {
                   className={`hover:bg-gray-50 cursor-pointer ${raffle.status === 'active' ? 'bg-green-50' : ''}`}
                   onClick={() => navigate(`/raffles/${raffle.id}`)}
                 >
+                  <td className="px-6 py-4" onClick={(e) => e.stopPropagation()}>
+                    <label className="flex items-center gap-1 cursor-pointer">
+                      <input
+                        type="radio"
+                        name="active_raffle"
+                        checked={currentRaffle?.id === raffle.id}
+                        disabled={raffle.status === 'completed' || raffle.status === 'cancelled' || activatingRaffleId === raffle.id}
+                        onChange={() => setActiveRaffle(raffle)}
+                        className="rounded-full border-gray-300 text-green-600 focus:ring-green-500"
+                      />
+                      {activatingRaffleId === raffle.id && <span className="text-xs text-gray-500">...</span>}
+                    </label>
+                  </td>
                   <td className="px-6 py-4">
                     <div className="font-medium text-gray-900">{raffle.name}</div>
                     <div className="text-sm text-gray-500">ID: {raffle.id}</div>

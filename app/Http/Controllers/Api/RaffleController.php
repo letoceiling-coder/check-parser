@@ -331,6 +331,58 @@ class RaffleController extends Controller
     }
 
     /**
+     * Сделать розыгрыш активным (только один активный на бота)
+     */
+    public function activate(Request $request, int $botId, int $raffleId): JsonResponse
+    {
+        $bot = TelegramBot::where('user_id', $request->user()->id)
+            ->where('id', $botId)
+            ->firstOrFail();
+
+        $raffle = Raffle::where('telegram_bot_id', $bot->id)
+            ->where('id', $raffleId)
+            ->firstOrFail();
+
+        if (in_array($raffle->status, [Raffle::STATUS_COMPLETED, Raffle::STATUS_CANCELLED], true)) {
+            return response()->json([
+                'message' => 'Завершённый или отменённый розыгрыш нельзя сделать активным',
+            ], 400);
+        }
+
+        if ($raffle->status === Raffle::STATUS_ACTIVE) {
+            return response()->json([
+                'message' => 'Розыгрыш уже активен',
+                'raffle' => $raffle,
+            ]);
+        }
+
+        try {
+            DB::beginTransaction();
+            Raffle::where('telegram_bot_id', $bot->id)
+                ->where('status', Raffle::STATUS_ACTIVE)
+                ->update(['status' => Raffle::STATUS_PAUSED]);
+            $raffle->status = Raffle::STATUS_ACTIVE;
+            $raffle->save();
+            $settings = BotSettings::where('telegram_bot_id', $bot->id)->first();
+            if ($settings) {
+                $settings->current_raffle_id = $raffle->id;
+                $settings->save();
+            }
+            DB::commit();
+        } catch (\Throwable $e) {
+            DB::rollBack();
+            Log::error('Raffle activate error: ' . $e->getMessage());
+            return response()->json(['message' => 'Ошибка при смене активного розыгрыша'], 500);
+        }
+
+        return response()->json([
+            'message' => 'Розыгрыш сделан активным',
+            'raffle' => $raffle->fresh(['winnerUser', 'winnerTicket']),
+            'current_raffle' => Raffle::getCurrentForBot($bot->id),
+        ]);
+    }
+
+    /**
      * Отменить текущий розыгрыш
      */
     public function cancel(Request $request, int $botId): JsonResponse
