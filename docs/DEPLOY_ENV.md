@@ -42,3 +42,24 @@ DEPLOY_TOKEN=ваш_секретный_токен_деплоя
 3. Запустите: `php artisan deploy` — сборка, коммит, пуш и запрос на сервер должны пройти без ошибки «DEPLOY_URL and DEPLOY_TOKEN must be set».
 
 Если сервер вернёт 401 Unauthorized — токены не совпадают. Проверьте, что строка `DEPLOY_TOKEN` на сервере и на ПК совпадает символ в символ (без пробелов, кавычек только при необходимости).
+
+## 4. Ошибка «Git reset failed: Permission denied» (500)
+
+Если в ответе деплоя есть ошибка вида:
+
+```text
+unable to unlink old 'public/static/js/...': Permission denied
+fatal: Could not reset index file to revision 'origin/main'
+```
+
+значит на сервере часть файлов (часто в `public/static/`) принадлежит другому пользователю (например root), а веб-сервер (PHP) работает от `www-data` и не может их перезаписать при `git reset --hard`.
+
+**Однократно на сервере** выполните (под root):
+
+```bash
+ssh root@89.169.39.244
+cd /var/www/auto.siteaccess.ru
+sudo bash scripts/setup-server-for-deploy.sh
+```
+
+Скрипт выставит владельца всего каталога проекта на `www-data:www-data`, после чего деплой через webhook будет проходить без этой ошибки. Для ручного обновления на сервере используйте: `sudo -u www-data bash update-on-server.sh`, чтобы новые файлы тоже создавались от `www-data`.
