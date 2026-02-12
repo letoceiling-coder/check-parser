@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Models\Check;
 use App\Models\Ticket;
 use App\Models\BotSettings;
+use App\Models\Raffle;
 use App\Models\TelegramBot;
 use App\Models\AdminActionLog;
 use App\Services\ReceiptParser;
@@ -22,8 +23,19 @@ class CheckController extends Controller
      */
     public function index(Request $request): JsonResponse
     {
+        $bot = TelegramBot::where('user_id', $request->user()->id)->first();
+        if (!$bot) {
+            return response()->json(['data' => [], 'current_page' => 1, 'last_page' => 1, 'total' => 0, 'per_page' => (int) $request->get('per_page', 20)]);
+        }
+
         $query = Check::with('telegramBot')
+            ->where('telegram_bot_id', $bot->id)
             ->orderBy('created_at', 'desc');
+
+        $activeRaffle = Raffle::getCurrentForBot($bot->id);
+        if ($activeRaffle) {
+            $query->where('raffle_id', $activeRaffle->id);
+        }
 
         // Фильтр по статусу
         if ($request->has('status') && $request->status !== 'all') {
@@ -59,11 +71,18 @@ class CheckController extends Controller
     }
 
     /**
-     * Получить один чек
+     * Получить один чек (только своего бота)
      */
-    public function show(int $id): JsonResponse
+    public function show(Request $request, int $id): JsonResponse
     {
-        $check = Check::with('telegramBot')->findOrFail($id);
+        $bot = TelegramBot::where('user_id', $request->user()->id)->first();
+        if (!$bot) {
+            return response()->json(['error' => 'Бот не найден'], 404);
+        }
+        $check = Check::with('telegramBot')
+            ->where('telegram_bot_id', $bot->id)
+            ->where('id', $id)
+            ->firstOrFail();
         return response()->json($check);
     }
 
@@ -72,7 +91,11 @@ class CheckController extends Controller
      */
     public function update(Request $request, int $id): JsonResponse
     {
-        $check = Check::findOrFail($id);
+        $bot = TelegramBot::where('user_id', $request->user()->id)->first();
+        if (!$bot) {
+            return response()->json(['error' => 'Бот не найден'], 404);
+        }
+        $check = Check::where('telegram_bot_id', $bot->id)->where('id', $id)->firstOrFail();
 
         $validated = $request->validate([
             'corrected_amount' => 'nullable|numeric|min:0',
@@ -237,37 +260,34 @@ class CheckController extends Controller
     /**
      * Получить статистику по чекам
      */
-    public function stats(): JsonResponse
+    public function stats(Request $request): JsonResponse
     {
+        $bot = TelegramBot::where('user_id', $request->user()->id)->first();
+        $baseQuery = Check::query();
+        if ($bot) {
+            $baseQuery->where('telegram_bot_id', $bot->id);
+            $activeRaffle = Raffle::getCurrentForBot($bot->id);
+            if ($activeRaffle) {
+                $baseQuery->where('raffle_id', $activeRaffle->id);
+            }
+        } else {
+            $baseQuery->whereRaw('1 = 0');
+        }
+
         $stats = [
-            'total' => Check::count(),
-            'success' => Check::where('status', 'success')->count(),
-            'partial' => Check::where('status', 'partial')->count(),
-            'failed' => Check::where('status', 'failed')->count(),
-            
-            // По OCR методам
-            'by_ocr_method' => Check::selectRaw('ocr_method, count(*) as count, 
-                SUM(CASE WHEN status = "success" THEN 1 ELSE 0 END) as success_count')
-                ->groupBy('ocr_method')
-                ->get(),
-            
-            // Общая сумма
-            'total_amount' => Check::whereNotNull('amount')->sum('amount'),
-            
-            // Средняя readable_ratio по методам
-            'avg_readable_ratio' => Check::selectRaw('ocr_method, AVG(readable_ratio) as avg_ratio')
-                ->whereNotNull('readable_ratio')
-                ->groupBy('ocr_method')
-                ->get(),
-            
-            // За последние 7 дней
-            'last_7_days' => Check::selectRaw('DATE(created_at) as date, count(*) as count,
-                SUM(CASE WHEN status = "success" THEN 1 ELSE 0 END) as success_count')
-                ->where('created_at', '>=', now()->subDays(7))
-                ->groupBy('date')
-                ->orderBy('date')
-                ->get(),
+            'total' => (clone $baseQuery)->count(),
+            'success' => (clone $baseQuery)->where('status', 'success')->count(),
+            'partial' => (clone $baseQuery)->where('status', 'partial')->count(),
+            'failed' => (clone $baseQuery)->where('status', 'failed')->count(),
         ];
+
+        $stats['by_ocr_method'] = (clone $baseQuery)->selectRaw('ocr_method, count(*) as count, SUM(CASE WHEN status = "success" THEN 1 ELSE 0 END) as success_count')
+            ->groupBy('ocr_method')->get();
+        $stats['total_amount'] = (clone $baseQuery)->whereNotNull('amount')->sum('amount');
+        $stats['avg_readable_ratio'] = (clone $baseQuery)->selectRaw('ocr_method, AVG(readable_ratio) as avg_ratio')
+            ->whereNotNull('readable_ratio')->groupBy('ocr_method')->get();
+        $stats['last_7_days'] = (clone $baseQuery)->selectRaw('DATE(created_at) as date, count(*) as count, SUM(CASE WHEN status = "success" THEN 1 ELSE 0 END) as success_count')
+            ->where('created_at', '>=', now()->subDays(7))->groupBy('date')->orderBy('date')->get();
 
         // Процент успешности
         $stats['success_rate'] = $stats['total'] > 0 
@@ -343,10 +363,16 @@ class CheckController extends Controller
         // Рассчитываем количество номерков
         $ticketsCount = $request->tickets_count ?? $settings->calculateTicketsCount($amount);
 
+        $minPrice = $settings->getEffectiveSlotPrice();
         if ($ticketsCount < 1) {
             return response()->json([
-                'error' => "Сумма {$amount} ₽ недостаточна для выдачи номерков. Минимум: {$settings->slot_price} ₽"
+                'error' => "Сумма {$amount} ₽ недостаточна для выдачи номерков. Минимум: {$minPrice} ₽"
             ], 400);
+        }
+
+        $activeRaffle = Raffle::getCurrentForBot($bot->id);
+        if (!$activeRaffle) {
+            return response()->json(['error' => 'Нет активного розыгрыша. Выберите активный розыгрыш на странице Розыгрыши.'], 400);
         }
 
         // Проверяем наличие мест
@@ -363,17 +389,24 @@ class CheckController extends Controller
             return response()->json(['error' => 'Пользователь чека не найден'], 400);
         }
 
-        // Выдаём номерки
+        $raffleId = $activeRaffle->id;
+        $slotsMode = $activeRaffle->slots_mode ?? $settings->slots_mode ?? 'sequential';
+
+        // Выдаём номерки в активный розыгрыш
         $tickets = Ticket::issueTickets(
             $bot->id,
             $checkUser,
             $ticketsCount,
             $check,
-            $settings->slots_mode
+            $slotsMode,
+            $raffleId
         );
 
-        // Обновляем чек
+        $check->raffle_id = $raffleId;
+        $check->save();
         $check->approve($ticketsCount, $request->user()->id, $request->amount);
+
+        $activeRaffle->updateStatistics();
 
         // Логируем действие
         AdminActionLog::logCheckApproved($check, $request->user()->id);
@@ -386,6 +419,13 @@ class CheckController extends Controller
 
         // Обновляем FSM состояние пользователя
         $checkUser->setState(BotFSM::STATE_APPROVED);
+
+        // Уведомляем админов бота, чтобы не одобряли повторно в Telegram
+        $telegram = new TelegramService($bot);
+        $adminMessage = "✅ Чек #{$check->id} одобрен на сайте (панель управления).\n\n"
+            . "Выдано номерков: " . count($ticketNumbers) . " (№" . implode(', №', $ticketNumbers) . ").\n\n"
+            . "Не нужно одобрять этот чек в боте — номерки уже выданы.";
+        $telegram->notifyAdmins($adminMessage);
 
         return response()->json([
             'message' => 'Чек одобрен',

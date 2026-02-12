@@ -26,6 +26,8 @@ function Checks() {
   const [raffleSuccess, setRaffleSuccess] = useState(null);
   const [reparseFailedLoading, setReparseFailedLoading] = useState(false);
   const [reparseFailedMessage, setReparseFailedMessage] = useState(null);
+  const [approvingId, setApprovingId] = useState(null);
+  const [approveError, setApproveError] = useState(null);
 
   const fetchChecks = useCallback(async (page = 1) => {
     setLoading(true);
@@ -161,6 +163,35 @@ function Checks() {
     fetchChecks(1);
   };
 
+  const handleApprove = async (checkId) => {
+    setApproveError(null);
+    setApprovingId(checkId);
+    const token = localStorage.getItem('token');
+    try {
+      const response = await fetch(`${API_URL}/api/checks/${checkId}/approve`, {
+        method: 'PUT',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Accept': 'application/json',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({}),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (response.ok) {
+        fetchChecks(currentPage);
+        fetchStats();
+        if (botId) fetchCurrentRaffle();
+      } else {
+        setApproveError(data.error || data.message || 'Ошибка одобрения');
+      }
+    } catch (err) {
+      setApproveError('Ошибка подключения');
+    } finally {
+      setApprovingId(null);
+    }
+  };
+
   const handleReparseFailed = async () => {
     setReparseFailedMessage(null);
     setReparseFailedLoading(true);
@@ -239,6 +270,16 @@ function Checks() {
     return labels[method] || method || '—';
   };
 
+  const getReviewStatusBadge = (reviewStatus) => {
+    const map = {
+      pending: { label: 'На проверке', className: 'bg-amber-100 text-amber-800' },
+      approved: { label: 'Одобрен', className: 'bg-green-100 text-green-800' },
+      rejected: { label: 'Отклонён', className: 'bg-red-100 text-red-800' },
+    };
+    const s = map[reviewStatus] || { label: reviewStatus || '—', className: 'bg-gray-100 text-gray-800' };
+    return <span className={`px-2 py-1 rounded text-xs font-medium ${s.className}`}>{s.label}</span>;
+  };
+
   return (
     <div className="p-6">
       {/* Modals */}
@@ -295,6 +336,13 @@ function Checks() {
         </div>
       )}
 
+      {!currentRaffle && botId && (
+        <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 mb-6 text-amber-800">
+          <p className="font-medium">Нет активного розыгрыша</p>
+          <p className="text-sm mt-1">Выберите активный розыгрыш на странице <Link to="/raffles" className="underline font-medium">Розыгрыши</Link>, чтобы видеть чеки и одобрять их.</p>
+        </div>
+      )}
+
       {/* Current Raffle Info */}
       {currentRaffle && (
         <div className="bg-gradient-to-r from-purple-50 to-indigo-50 border border-purple-200 rounded-xl p-4 mb-6">
@@ -305,6 +353,7 @@ function Checks() {
                 Участников: {currentRaffle.total_participants || 0} • 
                 Номерков: {currentRaffle.tickets_issued || 0} / {currentRaffle.total_slots}
               </p>
+              <p className="text-xs text-purple-500 mt-1">Ниже показаны чеки только этого розыгрыша</p>
             </div>
             <span className="px-3 py-1 bg-green-100 text-green-800 rounded-full text-sm font-medium">
               🟢 Активен
@@ -348,6 +397,13 @@ function Checks() {
       {reparseFailedMessage && (
         <div className="bg-blue-50 border border-blue-200 text-blue-800 px-4 py-3 rounded-lg mb-6">
           {reparseFailedMessage}
+        </div>
+      )}
+
+      {approveError && (
+        <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg mb-6 flex justify-between items-center">
+          <span>{approveError}</span>
+          <button type="button" onClick={() => setApproveError(null)} className="text-red-500 hover:text-red-700 font-medium">×</button>
         </div>
       )}
 
@@ -421,7 +477,7 @@ function Checks() {
             <tbody className="bg-white divide-y divide-gray-200">
               {loading ? (
                 <tr>
-                  <td colSpan="9" className="px-4 py-8 text-center text-gray-500">
+                  <td colSpan="10" className="px-4 py-8 text-center text-gray-500">
                     <div className="flex justify-center">
                       <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500"></div>
                     </div>
@@ -476,6 +532,21 @@ function Checks() {
                           <span className="px-2 py-1 rounded text-xs font-medium bg-amber-100 text-amber-800 border border-amber-200">
                             Требует проверки
                           </span>
+                        )}
+                      </span>
+                    </td>
+                    <td className="px-4 py-3">
+                      <span className="flex flex-wrap items-center gap-2">
+                        {getReviewStatusBadge(check.review_status)}
+                        {check.review_status === 'pending' && (
+                          <button
+                            type="button"
+                            onClick={() => handleApprove(check.id)}
+                            disabled={approvingId === check.id}
+                            className="px-2 py-1 rounded text-xs font-medium bg-green-100 text-green-800 hover:bg-green-200 disabled:opacity-50 transition"
+                          >
+                            {approvingId === check.id ? '…' : 'Одобрить'}
+                          </button>
                         )}
                       </span>
                     </td>
