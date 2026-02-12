@@ -234,26 +234,24 @@ class BotSettings extends Model
 
     /**
      * Получить количество свободных мест.
-     * Использует текущий розыгрыш (total_slots - tickets_issued), чтобы корректно показывать места
-     * даже если номерки ещё не инициализированы в таблице tickets.
+     * Всегда берём активный розыгрыш через getCurrentForBot() и считаем по факту из tickets,
+     * чтобы не расходиться с данными на странице «Номерки».
      */
     public function getAvailableSlotsCount(): int
     {
-        $raffle = null;
-        if ($this->current_raffle_id) {
-            $raffle = Raffle::find($this->current_raffle_id);
-        }
-        if (!$raffle || $raffle->status !== Raffle::STATUS_ACTIVE) {
-            $raffle = Raffle::getCurrentForBot($this->telegram_bot_id);
-            if ($raffle) {
-                $this->current_raffle_id = $raffle->id;
-                $this->save();
-            }
-        }
-        if ($raffle && $raffle->status === Raffle::STATUS_ACTIVE) {
-            return max(0, $raffle->total_slots - (int) $raffle->tickets_issued);
+        $raffle = Raffle::getCurrentForBot($this->telegram_bot_id);
+        if ($raffle) {
+            $this->current_raffle_id = $raffle->id;
+            $this->save();
+            $issuedCount = Ticket::where('raffle_id', $raffle->id)
+                ->where(function ($q) {
+                    $q->whereNotNull('bot_user_id')->orWhereNotNull('order_id');
+                })
+                ->count();
+            return max(0, (int) $raffle->total_slots - $issuedCount);
         }
         return Ticket::where('telegram_bot_id', $this->telegram_bot_id)
+            ->whereNull('raffle_id')
             ->whereNull('bot_user_id')
             ->count();
     }
