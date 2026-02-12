@@ -321,13 +321,18 @@ function Raffles() {
                 >
                   <td
                     className="px-6 py-4 align-middle"
-                    onClick={(e) => {
+                    onMouseDown={(e) => {
                       e.stopPropagation();
+                      e.preventDefault();
                       const canActivate = currentRaffle?.id !== raffle.id &&
                         raffle.status !== 'completed' &&
                         raffle.status !== 'cancelled' &&
                         !activatingRaffleId;
                       if (canActivate) setActiveRaffle(raffle);
+                    }}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      e.preventDefault();
                     }}
                   >
                     <label className="flex items-center gap-1 cursor-pointer">
