@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Models\Raffle;
 use App\Models\Ticket;
 use App\Models\TelegramBot;
 use Illuminate\Http\Request;
@@ -24,6 +25,19 @@ class TicketController extends Controller
         $query = Ticket::with(['botUser', 'check'])
             ->where('telegram_bot_id', $bot->id)
             ->orderBy('number', 'asc');
+
+        // По умолчанию — только активный розыгрыш; опционально ?raffle_id= для истории
+        $raffleIdFilter = $request->get('raffle_id');
+        if ($raffleIdFilter !== null && $raffleIdFilter !== '') {
+            $query->where('raffle_id', (int) $raffleIdFilter);
+        } else {
+            $activeRaffle = Raffle::resolveActiveForBot($bot->id);
+            if ($activeRaffle) {
+                $query->where('raffle_id', $activeRaffle->id);
+            } else {
+                $query->whereRaw('1 = 0');
+            }
+        }
 
         // Фильтр по статусу
         if ($request->has('status')) {
@@ -68,15 +82,22 @@ class TicketController extends Controller
             ]);
         }
 
-        $stats = Ticket::getStats($bot->id);
+        $activeRaffle = Raffle::resolveActiveForBot($bot->id);
+        $raffleId = $activeRaffle?->id;
+        $stats = Ticket::getStats($bot->id, $raffleId);
+        if (!$activeRaffle) {
+            $stats = ['total' => 0, 'issued' => 0, 'available' => 0, 'percentage_issued' => 0];
+        }
 
-        // Дополнительная статистика
+        // Дополнительная статистика по активному розыгрышу
         $stats['recent_issued'] = Ticket::where('telegram_bot_id', $bot->id)
+            ->when($raffleId, fn ($q) => $q->where('raffle_id', $raffleId))
             ->whereNotNull('issued_at')
             ->where('issued_at', '>=', now()->subDays(7))
             ->count();
 
         $stats['top_users'] = Ticket::where('telegram_bot_id', $bot->id)
+            ->when($raffleId, fn ($q) => $q->where('raffle_id', $raffleId))
             ->whereNotNull('bot_user_id')
             ->selectRaw('bot_user_id, count(*) as tickets_count')
             ->groupBy('bot_user_id')

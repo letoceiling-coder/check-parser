@@ -233,11 +233,15 @@ class BotUser extends Model
     }
 
     /**
-     * Получить номера билетов
+     * Получить номера билетов (опционально только по одному розыгрышу — для активного)
      */
-    public function getTicketNumbers(): array
+    public function getTicketNumbers(?int $raffleId = null): array
     {
-        return $this->tickets()->pluck('number')->sort()->values()->toArray();
+        $query = $this->tickets();
+        if ($raffleId !== null) {
+            $query->where('raffle_id', $raffleId);
+        }
+        return $query->pluck('number')->sort()->values()->toArray();
     }
 
     /**

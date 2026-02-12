@@ -255,14 +255,17 @@ class TelegramMenuService
     }
 
     /**
-     * Обработать нажатие кнопки "Мои номерки"
+     * Обработать нажатие кнопки "Мои номерки" (только по активному розыгрышу)
      */
     public function handleMyTickets(int $chatId, BotUser $botUser): void
     {
-        $tickets = Ticket::where('bot_user_id', $botUser->id)
-            ->orderBy('number')
-            ->pluck('number')
-            ->toArray();
+        $raffle = $this->settings?->getActiveRaffle();
+        if (!$raffle) {
+            $this->sendMessageWithMenu($chatId, 'Сейчас нет активного розыгрыша. Номерки появятся, когда розыгрыш будет запущен.');
+            return;
+        }
+
+        $tickets = $botUser->getTicketNumbers($raffle->id);
 
         if (empty($tickets)) {
             $message = $this->settings->getMessage('no_tickets', []);

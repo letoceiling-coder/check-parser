@@ -30,8 +30,8 @@ class RaffleController extends Controller
             ->orderByDesc('created_at')
             ->get();
 
-        // Получаем текущий активный розыгрыш
-        $currentRaffle = Raffle::getCurrentForBot($bot->id);
+        // Получаем текущий активный розыгрыш (единственный источник — ActiveRaffleResolver)
+        $currentRaffle = Raffle::resolveActiveForBot($bot->id);
 
         return response()->json([
             'raffles' => $raffles,
@@ -140,7 +140,41 @@ class RaffleController extends Controller
     }
 
     /**
-     * Получить текущий активный розыгрыш
+     * GET /api/bot/{botId}/raffles/active — активный розыгрыш + связанные данные (единый источник для фронта)
+     */
+    public function active(Request $request, int $botId): JsonResponse
+    {
+        $bot = TelegramBot::where('user_id', $request->user()->id)
+            ->where('id', $botId)
+            ->firstOrFail();
+
+        $raffle = Raffle::resolveActiveForBot($bot->id);
+        if (!$raffle) {
+            return response()->json([
+                'active_raffle' => null,
+                'has_active' => false,
+                'message' => 'Нет активного розыгрыша. Создайте или активируйте розыгрыш на странице Розыгрыши.',
+            ]);
+        }
+
+        $raffle->load(['winnerUser', 'winnerTicket']);
+        $raffle->updateStatistics();
+
+        return response()->json([
+            'active_raffle' => $raffle,
+            'has_active' => true,
+            'stats' => [
+                'total_participants' => $raffle->total_participants,
+                'tickets_issued' => $raffle->tickets_issued,
+                'total_revenue' => $raffle->total_revenue,
+                'checks_count' => $raffle->checks_count,
+                'available_tickets' => $raffle->total_slots - $raffle->tickets_issued,
+            ],
+        ]);
+    }
+
+    /**
+     * Получить текущий активный розыгрыш (без автосоздания)
      */
     public function current(Request $request, int $botId): JsonResponse
     {
@@ -148,10 +182,18 @@ class RaffleController extends Controller
             ->where('id', $botId)
             ->firstOrFail();
 
-        $raffle = Raffle::getOrCreateForBot($bot->id);
-        $raffle->updateStatistics();
+        $raffle = Raffle::resolveActiveForBot($bot->id);
+        if (!$raffle) {
+            return response()->json([
+                'message' => 'Нет активного розыгрыша. Создайте или активируйте розыгрыш на странице Розыгрыши.',
+                'raffle' => null,
+                'participants' => [],
+                'issued_tickets' => [],
+                'stats' => null,
+            ], 200);
+        }
 
-        // Получаем участников с их номерками для выбора победителя
+        $raffle->updateStatistics();
         $participants = $raffle->getParticipants();
         $issuedTickets = $raffle->getIssuedTickets();
 
@@ -178,7 +220,7 @@ class RaffleController extends Controller
             ->where('id', $botId)
             ->firstOrFail();
 
-        $raffle = Raffle::getCurrentForBot($bot->id);
+        $raffle = Raffle::resolveActiveForBot($bot->id);
 
         if (!$raffle) {
             return response()->json([
@@ -188,8 +230,9 @@ class RaffleController extends Controller
             ]);
         }
 
-        // Получаем все выданные номерки с информацией о владельцах
+        // Получаем все выданные номерки активного розыгрыша с информацией о владельцах
         $issuedTickets = Ticket::where('telegram_bot_id', $bot->id)
+            ->where('raffle_id', $raffle->id)
             ->whereNotNull('bot_user_id')
             ->with('botUser')
             ->orderBy('number')
@@ -230,7 +273,7 @@ class RaffleController extends Controller
             ->where('id', $botId)
             ->firstOrFail();
 
-        $raffle = Raffle::getCurrentForBot($bot->id);
+        $raffle = Raffle::resolveActiveForBot($bot->id);
 
         if (!$raffle) {
             return response()->json([
@@ -325,7 +368,7 @@ class RaffleController extends Controller
             return response()->json([
                 'message' => 'Новый розыгрыш начат!',
                 'raffle' => $newRaffle,
-                'tickets_stats' => Ticket::getStats($bot->id),
+                'tickets_stats' => Ticket::getStats($bot->id, $newRaffle->id),
             ]);
 
         } catch (\Exception $e) {
@@ -386,7 +429,7 @@ class RaffleController extends Controller
         return response()->json([
             'message' => 'Розыгрыш сделан активным',
             'raffle' => $raffle->fresh(['winnerUser', 'winnerTicket']),
-            'current_raffle' => Raffle::getCurrentForBot($bot->id),
+            'current_raffle' => Raffle::resolveActiveForBot($bot->id),
         ]);
     }
 
@@ -403,7 +446,7 @@ class RaffleController extends Controller
             ->where('id', $botId)
             ->firstOrFail();
 
-        $raffle = Raffle::getCurrentForBot($bot->id);
+        $raffle = Raffle::resolveActiveForBot($bot->id);
 
         if (!$raffle) {
             return response()->json([

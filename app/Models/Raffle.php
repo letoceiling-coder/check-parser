@@ -2,6 +2,8 @@
 
 namespace App\Models;
 
+use App\Services\ActiveRaffle\RaffleScope;
+use App\Services\ActiveRaffleResolver;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
@@ -311,28 +313,41 @@ class Raffle extends Model
     }
 
     /**
-     * Получить текущий активный розыгрыш для бота (с наибольшим id при нескольких active).
+     * Единственный способ получить активный розыгрыш для бота (через ActiveRaffleResolver).
      */
-    public static function getCurrentForBot(int $botId): ?self
+    public static function resolveActiveForBot(int $botId): ?self
     {
-        return self::where('telegram_bot_id', $botId)
-            ->where('status', self::STATUS_ACTIVE)
-            ->orderByDesc('id')
-            ->first();
+        return app(ActiveRaffleResolver::class)->getActive(RaffleScope::forBot($botId));
     }
 
     /**
-     * Получить или создать активный розыгрыш для бота
+     * Активный розыгрыш для бота или исключение (через ActiveRaffleResolver).
+     *
+     * @throws \App\Exceptions\NoActiveRaffleException
+     */
+    public static function requireActiveForBot(int $botId): self
+    {
+        return app(ActiveRaffleResolver::class)->requireActive(RaffleScope::forBot($botId));
+    }
+
+    /**
+     * @deprecated Используйте resolveActiveForBot() или ActiveRaffleResolver
+     */
+    public static function getCurrentForBot(int $botId): ?self
+    {
+        return self::resolveActiveForBot($botId);
+    }
+
+    /**
+     * @deprecated Не создавайте розыгрыш автоматически. Используйте resolveActiveForBot() и при отсутствии показывайте сообщение или createForBot() только из админки.
      */
     public static function getOrCreateForBot(int $botId): self
     {
-        $raffle = self::getCurrentForBot($botId);
-        
-        if (!$raffle) {
-            $raffle = self::createForBot($botId);
+        $raffle = self::resolveActiveForBot($botId);
+        if ($raffle) {
+            return $raffle;
         }
-        
-        return $raffle;
+        return self::createForBot($botId);
     }
 
     /**

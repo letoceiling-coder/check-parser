@@ -25,10 +25,7 @@ class RaffleSettingsController extends Controller
                 ->firstOrFail();
 
             $settings = BotSettings::getOrCreate($bot->id);
-            $activeRaffle = Raffle::getCurrentForBot($bot->id);
-            if (!$activeRaffle) {
-                $activeRaffle = Raffle::getOrCreateForBot($bot->id);
-            }
+            $activeRaffle = Raffle::resolveActiveForBot($bot->id);
             if ($activeRaffle && (int) $settings->current_raffle_id !== (int) $activeRaffle->id) {
                 $settings->current_raffle_id = $activeRaffle->id;
                 $settings->save();
@@ -47,6 +44,7 @@ class RaffleSettingsController extends Controller
 
             return response()->json([
                 'settings' => $settingsArray,
+                'active_raffle_missing' => !$activeRaffle,
                 'current_raffle' => $activeRaffle ? [
                     'id' => $activeRaffle->id,
                     'name' => $activeRaffle->name,
@@ -112,11 +110,13 @@ class RaffleSettingsController extends Controller
                 'msg_support' => 'nullable|string|max:4000',
             ]);
 
-            $activeRaffle = Raffle::getCurrentForBot($bot->id);
+            $activeRaffle = Raffle::resolveActiveForBot($bot->id);
             if (!$activeRaffle) {
-                $activeRaffle = Raffle::getOrCreateForBot($bot->id);
+                return response()->json([
+                    'message' => 'Нет активного розыгрыша. Создайте или активируйте розыгрыш на странице Розыгрыши, затем сохраняйте настройки.',
+                ], 400);
             }
-            if ($activeRaffle && (int) $settings->current_raffle_id !== (int) $activeRaffle->id) {
+            if ((int) $settings->current_raffle_id !== (int) $activeRaffle->id) {
                 $settings->current_raffle_id = $activeRaffle->id;
                 $settings->save();
             }
@@ -222,7 +222,12 @@ class RaffleSettingsController extends Controller
             ->firstOrFail();
 
         $settings = BotSettings::getOrCreate($bot->id);
-        $activeRaffle = Raffle::getCurrentForBot($bot->id) ?? Raffle::getOrCreateForBot($bot->id);
+        $activeRaffle = Raffle::resolveActiveForBot($bot->id);
+        if (!$activeRaffle) {
+            return response()->json([
+                'message' => 'Нет активного розыгрыша. Активируйте розыгрыш на странице Розыгрыши.',
+            ], 400);
+        }
         $totalSlots = $activeRaffle->total_slots ?? $settings->total_slots ?? 500;
 
         Ticket::initializeForBot($bot->id, $totalSlots, $activeRaffle->id);

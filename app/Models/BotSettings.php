@@ -2,6 +2,8 @@
 
 namespace App\Models;
 
+use App\Services\ActiveRaffle\RaffleScope;
+use App\Services\ActiveRaffleResolver;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
@@ -138,19 +140,14 @@ class BotSettings extends Model
     }
 
     /**
-     * Получить активный розыгрыш для бота (синхронизирует current_raffle_id с фактическим активным).
+     * Получить активный розыгрыш для бота (единственный источник — ActiveRaffleResolver).
      */
     public function getActiveRaffle(): ?Raffle
     {
-        $raffle = $this->current_raffle_id
-            ? Raffle::find($this->current_raffle_id)
-            : null;
-        if (!$raffle || $raffle->status !== Raffle::STATUS_ACTIVE) {
-            $raffle = Raffle::getCurrentForBot($this->telegram_bot_id);
-            if ($raffle) {
-                $this->current_raffle_id = $raffle->id;
-                $this->save();
-            }
+        $raffle = app(ActiveRaffleResolver::class)->getActive(RaffleScope::forBot($this->telegram_bot_id));
+        if ($raffle && (int) $this->current_raffle_id !== (int) $raffle->id) {
+            $this->current_raffle_id = $raffle->id;
+            $this->save();
         }
         return $raffle;
     }
@@ -233,28 +230,21 @@ class BotSettings extends Model
     // ==========================================
 
     /**
-     * Получить количество свободных мест.
-     * Всегда берём активный розыгрыш через getCurrentForBot() и считаем по факту из tickets,
-     * чтобы не расходиться с данными на странице «Номерки».
+     * Получить количество свободных мест только по активному розыгрышу.
      */
     public function getAvailableSlotsCount(): int
     {
-        $raffle = Raffle::getCurrentForBot($this->telegram_bot_id);
-        if ($raffle) {
-            $raffle->refresh();
-            $this->current_raffle_id = $raffle->id;
-            $this->save();
-            $issuedCount = Ticket::where('raffle_id', $raffle->id)
-                ->where(function ($q) {
-                    $q->whereNotNull('bot_user_id')->orWhereNotNull('order_id');
-                })
-                ->count();
-            return max(0, (int) $raffle->total_slots - $issuedCount);
+        $raffle = $this->getActiveRaffle();
+        if (!$raffle) {
+            return 0;
         }
-        return Ticket::where('telegram_bot_id', $this->telegram_bot_id)
-            ->whereNull('raffle_id')
-            ->whereNull('bot_user_id')
+        $raffle->refresh();
+        $issuedCount = Ticket::where('raffle_id', $raffle->id)
+            ->where(function ($q) {
+                $q->whereNotNull('bot_user_id')->orWhereNotNull('order_id');
+            })
             ->count();
+        return max(0, (int) $raffle->total_slots - $issuedCount);
     }
 
     /**

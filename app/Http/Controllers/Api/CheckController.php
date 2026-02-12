@@ -32,9 +32,17 @@ class CheckController extends Controller
             ->where('telegram_bot_id', $bot->id)
             ->orderBy('created_at', 'desc');
 
-        $activeRaffle = Raffle::getCurrentForBot($bot->id);
-        if ($activeRaffle) {
-            $query->where('raffle_id', $activeRaffle->id);
+        // По умолчанию — только активный розыгрыш; опционально ?raffle_id= для истории
+        $raffleIdFilter = $request->get('raffle_id');
+        if ($raffleIdFilter !== null && $raffleIdFilter !== '') {
+            $query->where('raffle_id', (int) $raffleIdFilter);
+        } else {
+            $activeRaffle = Raffle::resolveActiveForBot($bot->id);
+            if ($activeRaffle) {
+                $query->where('raffle_id', $activeRaffle->id);
+            } else {
+                $query->whereRaw('1 = 0'); // Нет активного — пустой список
+            }
         }
 
         // Фильтр по статусу
@@ -266,9 +274,11 @@ class CheckController extends Controller
         $baseQuery = Check::query();
         if ($bot) {
             $baseQuery->where('telegram_bot_id', $bot->id);
-            $activeRaffle = Raffle::getCurrentForBot($bot->id);
+            $activeRaffle = Raffle::resolveActiveForBot($bot->id);
             if ($activeRaffle) {
                 $baseQuery->where('raffle_id', $activeRaffle->id);
+            } else {
+                $baseQuery->whereRaw('1 = 0');
             }
         } else {
             $baseQuery->whereRaw('1 = 0');
@@ -370,7 +380,7 @@ class CheckController extends Controller
             ], 400);
         }
 
-        $activeRaffle = Raffle::getCurrentForBot($bot->id);
+        $activeRaffle = Raffle::resolveActiveForBot($bot->id);
         if (!$activeRaffle) {
             return response()->json(['error' => 'Нет активного розыгрыша. Выберите активный розыгрыш на странице Розыгрыши.'], 400);
         }

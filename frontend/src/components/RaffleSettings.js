@@ -6,6 +6,7 @@ const API_URL = process.env.REACT_APP_API_URL || window.location.origin;
 function RaffleSettings({ bot }) {
   const [settings, setSettings] = useState(null);
   const [currentRaffle, setCurrentRaffle] = useState(null);
+  const [activeRaffleMissing, setActiveRaffleMissing] = useState(false);
   const [ticketsStats, setTicketsStats] = useState(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -47,6 +48,7 @@ function RaffleSettings({ bot }) {
       if (response.ok) {
         setSettings(data.settings);
         setCurrentRaffle(data.current_raffle || null);
+        setActiveRaffleMissing(!!data.active_raffle_missing);
         setTicketsStats(data.tickets_stats);
 
         // Заполняем форму
@@ -205,13 +207,24 @@ function RaffleSettings({ bot }) {
         </div>
       )}
 
+      {/* Нет активного розыгрыша — блокируем сохранение */}
+      {activeRaffleMissing && (
+        <div className="bg-amber-50 border border-amber-300 rounded-lg px-4 py-3 text-amber-800">
+          <p className="font-medium">⚠️ Нет активного розыгрыша</p>
+          <p className="text-sm mt-1">
+            Создайте или активируйте розыгрыш на странице <Link to="/raffles" className="underline font-medium">Розыгрыши</Link>, затем здесь можно будет сохранять настройки (в т.ч. QR-код и сообщения).
+          </p>
+        </div>
+      )}
+
       {/* Заголовок */}
       <div className="flex justify-between items-center">
         <h2 className="text-2xl font-bold text-gray-800">🎯 Настройки розыгрыша</h2>
         <button
           onClick={handleSave}
-          disabled={saving}
+          disabled={saving || activeRaffleMissing}
           className="px-6 py-2 bg-purple-500 text-white rounded-lg hover:bg-purple-600 disabled:opacity-50 transition-colors"
+          title={activeRaffleMissing ? 'Сначала активируйте розыгрыш на странице Розыгрыши' : ''}
         >
           {saving ? 'Сохранение...' : '💾 Сохранить всё'}
         </button>

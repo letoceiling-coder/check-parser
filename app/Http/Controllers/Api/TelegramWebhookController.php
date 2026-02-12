@@ -7,6 +7,7 @@ use App\Models\Check;
 use App\Models\TelegramBot;
 use App\Models\BotUser;
 use App\Models\BotSettings;
+use App\Exceptions\NoActiveRaffleException;
 use App\Models\Raffle;
 use App\Services\Telegram\TelegramMenuService;
 use Illuminate\Http\Request;
@@ -293,15 +294,18 @@ class TelegramWebhookController extends Controller
             $this->deleteMessage($bot, $chatId, $botUser->last_bot_message_id);
         }
         
-        // Получаем текущий розыгрыш
-        $raffle = Raffle::getCurrentForBot($bot->id);
-        if (!$raffle) {
-            $raffle = Raffle::createForBot($bot->id);
+        // Только активный розыгрыш; без автосоздания
+        try {
+            $raffle = Raffle::requireActiveForBot($bot->id);
+        } catch (NoActiveRaffleException $e) {
+            $this->sendMessage($bot, $chatId, "Сейчас нет активного розыгрыша. Обратитесь к организаторам или попробуйте позже.");
+            $botUser->update(['fsm_state' => BotUser::STATE_IDLE, 'last_bot_message_id' => null]);
+            return;
         }
-        
-        // Проверка свободных мест
+
+        // Проверка свободных мест и номерков пользователя только по активному розыгрышу
         $availableSlots = $settings->getAvailableSlotsCount();
-        $userTickets = $botUser->getTicketNumbers();
+        $userTickets = $botUser->getTicketNumbers($raffle->id);
         $hasTickets = count($userTickets) > 0;
         
         // Отправляем постоянное меню
@@ -819,9 +823,15 @@ class TelegramWebhookController extends Controller
             
             // === КОНЕЦ ПРОВЕРКИ ДУБЛИКАТОВ ===
             
-            // Получаем или создаём текущий розыгрыш
-            $currentRaffle = Raffle::getOrCreateForBot($bot->id);
-            
+            // Только активный розыгрыш; не создаём автоматически
+            try {
+                $currentRaffle = Raffle::requireActiveForBot($bot->id);
+            } catch (NoActiveRaffleException $e) {
+                Storage::disk('local')->delete($filePath);
+                $this->sendMessage($bot, $chatId, 'Сейчас нет активного розыгрыша. Чек не принят. Обратитесь к организаторам.');
+                return;
+            }
+
             // Очистка текста от проблемных символов для MySQL
             $rawText = null;
             if (isset($checkData['raw_text'])) {
@@ -4701,9 +4711,10 @@ PYTHON;
         $this->deleteMessage($bot, $chatId, $messageId);
         
         // Создаем заказ с бронированием (транзакция внутри Order::createWithReservation)
-        $raffle = Raffle::getCurrentForBot($bot->id);
-        if (!$raffle) {
-            $this->sendMessage($bot, $chatId, "⚠️ Ошибка: активный розыгрыш не найден. Обратитесь к администратору.");
+        try {
+            $raffle = Raffle::requireActiveForBot($bot->id);
+        } catch (NoActiveRaffleException $e) {
+            $this->sendMessage($bot, $chatId, "Сейчас нет активного розыгрыша. Обратитесь к администратору.");
             return;
         }
         
