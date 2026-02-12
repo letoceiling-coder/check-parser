@@ -57,9 +57,9 @@ class RaffleController extends Controller
             ->with(['winnerUser', 'winnerTicket', 'checks', 'tickets'])
             ->firstOrFail();
 
-        // Получаем участников; номерки — только из запроса по raffle_id (без связи user->tickets)
+        // Получаем участников; номерки — только выданные (bot_user_id), как в боте «Мои номерки»
         $participantsList = $raffle->getParticipants();
-        $ticketsByUser = $raffle->getTicketsByUserId();
+        $ticketsByUser = $raffle->getIssuedTicketsByUserId();
         $winnerBotUserId = $raffle->winner_bot_user_id;
         $winnerFio = null;
         $participants = $participantsList->map(function ($user) use ($winnerBotUserId, $ticketsByUser, &$winnerFio) {
@@ -111,7 +111,7 @@ class RaffleController extends Controller
             ->firstOrFail();
 
         $participantsList = $raffle->getParticipants();
-        $ticketsByUser = $raffle->getTicketsByUserId();
+        $ticketsByUser = $raffle->getIssuedTicketsByUserId();
         $participants = $participantsList->map(function ($user) use ($ticketsByUser) {
             $fio = self::ensurePlainString($user->fio);
             if ($fio === '' || $fio === null) {

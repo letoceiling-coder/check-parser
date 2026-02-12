@@ -257,6 +257,20 @@ class Raffle extends Model
     }
 
     /**
+     * Только выданные номерки этого розыгрыша по пользователям (bot_user_id не null).
+     * Совпадает с тем, что показывает бот в «Мои номерки» — без привязки по order_id (бронь).
+     */
+    public function getIssuedTicketsByUserId(): Collection
+    {
+        $raffleId = (int) $this->id;
+        return Ticket::where('raffle_id', $raffleId)
+            ->whereNotNull('bot_user_id')
+            ->orderBy('number')
+            ->get()
+            ->groupBy('bot_user_id');
+    }
+
+    /**
      * Получить все выданные номерки
      */
     public function getIssuedTickets()
