@@ -19,21 +19,29 @@ class RaffleSettingsController extends Controller
      */
     public function show(Request $request, int $id): JsonResponse
     {
-        $bot = TelegramBot::where('user_id', $request->user()->id)
-            ->where('id', $id)
-            ->firstOrFail();
+        try {
+            $bot = TelegramBot::where('user_id', $request->user()->id)
+                ->where('id', $id)
+                ->firstOrFail();
 
-        $settings = BotSettings::getOrCreate($bot->id);
-        
-        // Добавляем статистику
-        $ticketsStats = Ticket::getStats($bot->id);
+            $settings = BotSettings::getOrCreate($bot->id);
+            $ticketsStats = Ticket::getStats($bot->id);
 
-        return response()->json([
-            'settings' => $settings,
-            'tickets_stats' => $ticketsStats,
-            'qr_image_url' => $settings->getQrImageUrl(),
-            'default_messages' => BotSettings::DEFAULTS,
-        ]);
+            return response()->json([
+                'settings' => $settings,
+                'tickets_stats' => $ticketsStats,
+                'qr_image_url' => $settings->getQrImageUrl(),
+                'default_messages' => BotSettings::DEFAULTS,
+            ]);
+        } catch (\Throwable $e) {
+            Log::error('RaffleSettings show error: ' . $e->getMessage(), [
+                'id' => $id,
+                'trace' => $e->getTraceAsString(),
+            ]);
+            return response()->json([
+                'message' => config('app.debug') ? $e->getMessage() : 'Ошибка загрузки настроек',
+            ], 500);
+        }
     }
 
     /**
@@ -80,20 +88,22 @@ class RaffleSettingsController extends Controller
                 'msg_support' => 'nullable|string|max:4000',
             ]);
 
-            // Обновляем только переданные поля
-            $fillable = array_filter($validated, fn($v) => $v !== null);
-            $settings->fill($fillable);
+            // Обновляем только переданные поля, которые есть в модели
+            $allowed = array_flip($settings->getFillable());
+            $toFill = array_filter($validated, fn($v) => $v !== null);
+            $toFill = array_intersect_key($toFill, $allowed);
+            $settings->fill($toFill);
             $settings->save();
 
             // Если изменилось количество мест — синхронизируем Raffle, уменьшаем лишние билеты или добавляем недостающие
             if (isset($validated['total_slots'])) {
                 $newTotal = (int) $validated['total_slots'];
                 $raffleId = $settings->current_raffle_id;
-                if (!$raffleId) {
+                if (!$raffleId || (int) $raffleId < 1) {
                     $raffle = Raffle::getCurrentForBot($bot->id);
                     $raffleId = $raffle?->id;
                 }
-                $raffleId = $raffleId !== null ? (int) $raffleId : null;
+                $raffleId = ($raffleId && (int) $raffleId > 0) ? (int) $raffleId : null;
                 $currentCount = Ticket::where('telegram_bot_id', $bot->id)
                     ->when($raffleId !== null, fn($q) => $q->where('raffle_id', $raffleId), fn($q) => $q->whereNull('raffle_id'))
                     ->count();

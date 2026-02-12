@@ -41,11 +41,11 @@ function RaffleSettings({ bot }) {
         },
       });
 
+      const data = await response.json().catch(() => ({}));
       if (response.ok) {
-        const data = await response.json();
         setSettings(data.settings);
         setTicketsStats(data.tickets_stats);
-        
+
         // Заполняем форму
         setFormData({
           total_slots: data.settings.total_slots,
@@ -66,6 +66,9 @@ function RaffleSettings({ bot }) {
           msgs[fieldName] = data.settings[key] || '';
         });
         setMessages(msgs);
+        setError(null);
+      } else {
+        setError(data.message || 'Ошибка загрузки настроек');
       }
     } catch (err) {
       console.error('Error fetching settings:', err);

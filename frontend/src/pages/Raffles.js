@@ -1,6 +1,5 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import * as XLSX from 'xlsx';
 
 const API_URL = process.env.REACT_APP_API_URL || window.location.origin;
 
@@ -180,9 +179,15 @@ function Raffles() {
         return [phone, fio, numbers];
       });
       const wsData = [headerRow, ...dataRows];
+      const xlsxMod = await import('xlsx').catch(() => null);
+      const XLSX = xlsxMod?.default || xlsxMod;
+      if (!XLSX || !XLSX.utils) {
+        setError('Модуль экспорта недоступен. Обновите страницу или попробуйте позже.');
+        return;
+      }
       const ws = XLSX.utils.aoa_to_sheet(wsData);
       const wb = XLSX.utils.book_new();
-      const safeName = (raffle.name || `Розыгрыш_${raffle.id}`).replace(/[\\/*?:\[\]]/g, '_').slice(0, 31);
+      const safeName = (raffle.name || `Розыгрыш_${raffle.id}`).replace(/[\[\]\\/*?:]/g, '_').slice(0, 31);
       XLSX.utils.book_append_sheet(wb, ws, safeName);
       XLSX.writeFile(wb, `участники_${safeName}.xlsx`);
     } catch (err) {
