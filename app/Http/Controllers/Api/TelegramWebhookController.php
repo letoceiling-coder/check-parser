@@ -5013,6 +5013,12 @@ PYTHON;
             $operationId = Check::extractOperationId($checkData['raw_text']);
         }
         $uniqueKey = Check::generateUniqueKey($checkData['amount'] ?? null, $checkData['date'] ?? null);
+        Log::info('Checking duplicate for order', [
+            'order_id' => $order->id,
+            'file_hash' => $fileHash ? substr($fileHash, 0, 16) . '...' : null,
+            'operation_id' => $operationId,
+            'unique_key' => $uniqueKey,
+        ]);
         $duplicateOriginal = Check::findDuplicate($bot->id, $fileHash ?: null, $operationId, $uniqueKey);
 
         if ($duplicateOriginal) {
@@ -5071,6 +5077,9 @@ PYTHON;
                 'file_type' => 'pdf',
                 'file_size' => $document['file_size'] ?? 0,
                 'file_hash' => $fileHash,
+                'operation_id' => $operationId,
+                'unique_key' => $uniqueKey,
+                'is_duplicate' => false,
                 'amount' => $checkData['amount'] ?? null,
                 'check_date' => $checkData['date'] ?? null,
                 'ocr_method' => $checkData['ocr_method'] ?? 'unknown',
