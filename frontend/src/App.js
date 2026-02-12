@@ -10,6 +10,7 @@ import Tickets from './pages/Tickets';
 import AdminRequests from './pages/AdminRequests';
 import BotUsers from './pages/BotUsers';
 import Raffles from './pages/Raffles';
+import RaffleDetail from './pages/RaffleDetail';
 import GoogleSheetsSettings from './pages/GoogleSheetsSettings';
 import Documentation from './pages/Documentation';
 import Broadcast from './pages/Broadcast';
@@ -130,6 +131,7 @@ function App() {
                   <Route path="/checks/:id" element={<CheckDetails />} />
                   <Route path="/tickets" element={<Tickets />} />
                   <Route path="/raffles" element={<Raffles />} />
+                  <Route path="/raffles/:id" element={<RaffleDetail />} />
                   <Route path="/admin-requests" element={<AdminRequests />} />
                   <Route path="/bot-users" element={<BotUsers />} />
                   <Route path="/bot" element={<Bot />} />
