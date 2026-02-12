@@ -295,38 +295,38 @@ class Check extends Model
     // ==========================================
 
     /**
-     * Найти дубликат по хешу файла
+     * Найти дубликат по хешу файла.
+     * Один и тот же файл считается дубликатом всегда (в т.ч. если первый чек был отклонён).
      */
     public static function findDuplicateByHash(int $botId, string $fileHash): ?self
     {
         return self::where('telegram_bot_id', $botId)
             ->where('file_hash', $fileHash)
             ->where('is_duplicate', false)
-            ->where('review_status', '!=', 'rejected')
             ->first();
     }
 
     /**
-     * Найти дубликат по ID операции
+     * Найти дубликат по ID операции.
+     * Одна и та же операция считается дубликатом всегда.
      */
     public static function findDuplicateByOperationId(int $botId, string $operationId): ?self
     {
         return self::where('telegram_bot_id', $botId)
             ->where('operation_id', $operationId)
             ->where('is_duplicate', false)
-            ->where('review_status', '!=', 'rejected')
             ->first();
     }
 
     /**
-     * Найти дубликат по уникальному ключу (сумма + дата)
+     * Найти дубликат по уникальному ключу (сумма + дата).
+     * Один и тот же ключ считается дубликатом всегда.
      */
     public static function findDuplicateByUniqueKey(int $botId, string $uniqueKey): ?self
     {
         return self::where('telegram_bot_id', $botId)
             ->where('unique_key', $uniqueKey)
             ->where('is_duplicate', false)
-            ->where('review_status', '!=', 'rejected')
             ->first();
     }
 
