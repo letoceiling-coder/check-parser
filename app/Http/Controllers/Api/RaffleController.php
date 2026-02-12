@@ -53,13 +53,13 @@ class RaffleController extends Controller
             ->with(['winnerUser', 'winnerTicket', 'checks', 'tickets'])
             ->firstOrFail();
 
-        // Получаем участников с их номерками (явно добавляем phone и fio — они accessors и не попадают в toArray по умолчанию)
+        // Получаем участников с их номерками (явно добавляем phone и fio; убираем PHP serialized вид если есть)
         $participantsList = $raffle->getParticipants();
         $participants = $participantsList->map(function ($user) {
             return [
                 'id' => $user->id,
-                'phone' => $user->phone,
-                'fio' => $user->fio,
+                'phone' => self::ensurePlainString($user->phone),
+                'fio' => self::ensurePlainString($user->fio),
                 'first_name' => $user->first_name,
                 'last_name' => $user->last_name,
                 'username' => $user->username,
@@ -385,5 +385,20 @@ class RaffleController extends Controller
         } catch (\Exception $e) {
             Log::error('Failed to notify winner: ' . $e->getMessage());
         }
+    }
+
+    /**
+     * Вернуть обычную строку: если значение — PHP serialized (s:len:"...";), распаковать.
+     */
+    private static function ensurePlainString(?string $value): string
+    {
+        if ($value === null || $value === '') {
+            return '';
+        }
+        if (preg_match('/^s:\d+:"/', $value)) {
+            $un = @unserialize($value);
+            return is_string($un) ? $un : $value;
+        }
+        return $value;
     }
 }
