@@ -196,6 +196,67 @@ class Raffle extends Model
     }
 
     /**
+     * Номерки только этого розыгрыша, сгруппированные по bot_user_id.
+     * Один запрос к БД с условием raffle_id = $this->id — без использования связи user->tickets.
+     */
+    public function getTicketsByUserId(): Collection
+    {
+        $raffleId = (int) $this->id;
+        $userIds = Ticket::where('raffle_id', $raffleId)
+            ->where(function ($q) {
+                $q->whereNotNull('bot_user_id')->orWhereNotNull('order_id');
+            })
+            ->with('order')
+            ->get()
+            ->map(function (Ticket $t) {
+                if ($t->bot_user_id) {
+                    return (int) $t->bot_user_id;
+                }
+                $oid = $t->relationLoaded('order') ? $t->order?->bot_user_id : (Order::find($t->order_id)?->bot_user_id ?? null);
+                return $oid ? (int) $oid : null;
+            })
+            ->filter()
+            ->unique()
+            ->values()
+            ->all();
+
+        if (empty($userIds)) {
+            return collect();
+        }
+
+        $orderIdsByUser = Order::where('raffle_id', $raffleId)
+            ->whereIn('bot_user_id', $userIds)
+            ->get()
+            ->groupBy('bot_user_id')
+            ->map(fn ($orders) => $orders->pluck('id')->all())
+            ->toArray();
+
+        $allOrderIds = collect($orderIdsByUser)->flatten()->all();
+
+        return Ticket::where('raffle_id', $raffleId)
+            ->where(function ($q) use ($userIds, $allOrderIds) {
+                $q->whereIn('bot_user_id', $userIds);
+                if (!empty($allOrderIds)) {
+                    $q->orWhereIn('order_id', $allOrderIds);
+                }
+            })
+            ->orderBy('number')
+            ->get()
+            ->groupBy(function (Ticket $t) use ($orderIdsByUser) {
+                if ($t->bot_user_id) {
+                    return (int) $t->bot_user_id;
+                }
+                foreach ($orderIdsByUser as $uid => $oids) {
+                    $oids = is_array($oids) ? $oids : [$oids];
+                    if (in_array((int) $t->order_id, array_map('intval', $oids), true)) {
+                        return (int) $uid;
+                    }
+                }
+                return 0;
+            });
+    }
+
+    /**
      * Получить все выданные номерки
      */
     public function getIssuedTickets()

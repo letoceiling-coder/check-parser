@@ -122,12 +122,15 @@ function RaffleDetail() {
       const raffleId = data.raffle_id ?? raffle.id;
       const raffleName = data.raffle_name ?? raffle.name ?? `Розыгрыш_${raffle.id}`;
       const list = data.participants || [];
-      const headerRow = ['телефон', 'фамилия имя отчество', 'номерки'];
+      const headerRow = ['телефон', 'фамилия имя отчество', 'username', 'telegram_id', 'chat_id', 'номерки'];
       const dataRows = list.map((p) => {
         const phone = p.phone ?? '';
         const fio = p.fio ?? '';
+        const username = p.username ?? '—';
+        const telegramId = p.telegram_id ?? '—';
+        const chatId = p.chat_id ?? '—';
         const numbers = (p.tickets || []).map((t) => t.number).sort((a, b) => a - b).join(', ');
-        return [phone, fio, numbers];
+        return [phone, fio, username, telegramId, chatId, numbers];
       });
       const titleRow = [`Розыгрыш: ${raffleName} (ID: ${raffleId})`];
       const wsData = [titleRow, [], headerRow, ...dataRows];

@@ -57,17 +57,17 @@ class RaffleController extends Controller
             ->with(['winnerUser', 'winnerTicket', 'checks', 'tickets'])
             ->firstOrFail();
 
-        // Получаем участников с их номерками только этого розыгрыша; помечаем победителя
+        // Получаем участников; номерки — только из запроса по raffle_id (без связи user->tickets)
         $participantsList = $raffle->getParticipants();
+        $ticketsByUser = $raffle->getTicketsByUserId();
         $winnerBotUserId = $raffle->winner_bot_user_id;
         $winnerFio = null;
-        $raffleIdInt = (int) $raffle->id;
-        $participants = $participantsList->map(function ($user) use ($winnerBotUserId, $raffleIdInt, &$winnerFio) {
+        $participants = $participantsList->map(function ($user) use ($winnerBotUserId, $ticketsByUser, &$winnerFio) {
             $fio = self::ensurePlainString($user->fio);
             if ($winnerBotUserId && (int) $user->id === (int) $winnerBotUserId) {
                 $winnerFio = $fio;
             }
-            $ticketsThisRaffle = $user->tickets->filter(fn ($t) => (int) $t->raffle_id === $raffleIdInt);
+            $tickets = $ticketsByUser->get((int) $user->id, collect());
             return [
                 'id' => $user->id,
                 'phone' => self::ensurePlainString($user->phone),
@@ -75,7 +75,7 @@ class RaffleController extends Controller
                 'first_name' => $user->first_name,
                 'last_name' => $user->last_name,
                 'username' => $user->username,
-                'tickets' => $ticketsThisRaffle->map(fn ($t) => ['id' => $t->id, 'number' => $t->number])->values()->all(),
+                'tickets' => $tickets->map(fn ($t) => ['id' => $t->id, 'number' => $t->number])->values()->all(),
                 'is_winner' => $winnerBotUserId && (int) $user->id === (int) $winnerBotUserId,
             ];
         })->values()->all();
@@ -111,18 +111,21 @@ class RaffleController extends Controller
             ->firstOrFail();
 
         $participantsList = $raffle->getParticipants();
-        $raffleIdInt = (int) $raffle->id;
-        $participants = $participantsList->map(function ($user) use ($raffleIdInt) {
+        $ticketsByUser = $raffle->getTicketsByUserId();
+        $participants = $participantsList->map(function ($user) use ($ticketsByUser) {
             $fio = self::ensurePlainString($user->fio);
             if ($fio === '' || $fio === null) {
                 $fio = trim(self::ensurePlainString($user->first_name) . ' ' . self::ensurePlainString($user->last_name)) ?: self::ensurePlainString($user->username) ?: '—';
             }
-            $ticketsForThisRaffle = $user->tickets->filter(fn ($t) => (int) $t->raffle_id === $raffleIdInt);
+            $tickets = $ticketsByUser->get((int) $user->id, collect());
             return [
                 'id' => $user->id,
                 'phone' => self::ensurePlainString($user->phone) ?: '—',
                 'fio' => $fio,
-                'tickets' => $ticketsForThisRaffle->map(fn ($t) => ['id' => $t->id, 'number' => $t->number])->values()->all(),
+                'username' => $user->username ? ('@' . $user->username) : '—',
+                'telegram_id' => $user->telegram_user_id ?? '—',
+                'chat_id' => $user->telegram_user_id ?? '—',
+                'tickets' => $tickets->map(fn ($t) => ['id' => $t->id, 'number' => $t->number])->values()->all(),
             ];
         })->values()->all();
 
