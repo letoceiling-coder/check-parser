@@ -311,13 +311,13 @@ class Raffle extends Model
     }
 
     /**
-     * Получить текущий активный розыгрыш для бота
+     * Получить текущий активный розыгрыш для бота (с наибольшим id при нескольких active).
      */
     public static function getCurrentForBot(int $botId): ?self
     {
         return self::where('telegram_bot_id', $botId)
             ->where('status', self::STATUS_ACTIVE)
-            ->latest()
+            ->orderByDesc('id')
             ->first();
     }
 

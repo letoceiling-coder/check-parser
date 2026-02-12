@@ -241,6 +241,7 @@ class BotSettings extends Model
     {
         $raffle = Raffle::getCurrentForBot($this->telegram_bot_id);
         if ($raffle) {
+            $raffle->refresh();
             $this->current_raffle_id = $raffle->id;
             $this->save();
             $issuedCount = Ticket::where('raffle_id', $raffle->id)

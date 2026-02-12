@@ -3652,9 +3652,11 @@ PYTHON;
                 // Пользователь хочет ввести число вручную
                 $this->deleteMessage($bot, $chatId, $messageId);
                 $botUser->setState(BotUser::STATE_ASK_QUANTITY);
+                $availableSlots = $botSettings->getAvailableSlotsCount();
                 $msg = $botSettings->msg_ask_quantity ?? 
-                    "Стоимость одной наклейки: {price} руб.\n\nВведите количество наклеек, которые хотите приобрести (цифрой):";
-                $msg = str_replace('{price}', number_format($botSettings->slot_price, 0, '', ' '), $msg);
+                    "Стоимость одной наклейки: {price} руб.\n\nДоступно мест: {available_slots}\n\nВведите количество наклеек (цифрой):";
+                $msg = str_replace('{price}', number_format($botSettings->getEffectiveSlotPrice(), 0, '', ' '), $msg);
+                $msg = str_replace('{available_slots}', $availableSlots, $msg);
                 $this->sendMessage($bot, $chatId, $msg);
                 return;
             
