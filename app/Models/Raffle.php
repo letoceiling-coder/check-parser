@@ -5,6 +5,7 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Support\Collection;
 
 class Raffle extends Model
 {
@@ -120,17 +121,74 @@ class Raffle extends Model
     }
 
     /**
-     * Получить список участников с номерками
+     * Получить список участников с номерками (в т.ч. по брони — билеты с order_id).
      */
-    public function getParticipants()
+    public function getParticipants(): Collection
     {
-        return BotUser::whereHas('tickets', function ($query) {
-            $query->where('raffle_id', $this->id);
-        })
-        ->with(['tickets' => function ($query) {
-            $query->where('raffle_id', $this->id)->orderBy('number');
-        }])
-        ->get();
+        $raffleId = $this->id;
+
+        // ID пользователей: владельцы билетов (bot_user_id) или владельцы заказов (order.bot_user_id)
+        $userIds = Ticket::where('raffle_id', $raffleId)
+            ->where(function ($q) {
+                $q->whereNotNull('bot_user_id')->orWhereNotNull('order_id');
+            })
+            ->with('order')
+            ->get()
+            ->map(function (Ticket $t) {
+                if ($t->bot_user_id) {
+                    return $t->bot_user_id;
+                }
+                return $t->relationLoaded('order') ? $t->order?->bot_user_id : (Order::find($t->order_id)?->bot_user_id);
+            })
+            ->filter()
+            ->unique()
+            ->values()
+            ->all();
+
+        if (empty($userIds)) {
+            return collect();
+        }
+
+        $users = BotUser::whereIn('id', $userIds)->get()->keyBy('id');
+
+        // Для каждого пользователя — его номерки в этом розыгрыше (по билетам или по заказам)
+        $orderIdsByUser = Order::where('raffle_id', $raffleId)
+            ->whereIn('bot_user_id', $userIds)
+            ->get()
+            ->groupBy('bot_user_id')
+            ->map(fn ($orders) => $orders->pluck('id')->all())
+            ->toArray();
+
+        $allOrderIds = collect($orderIdsByUser)->flatten()->all();
+
+        $ticketsByUser = Ticket::where('raffle_id', $raffleId)
+            ->where(function ($q) use ($userIds, $allOrderIds) {
+                $q->whereIn('bot_user_id', $userIds);
+                if (!empty($allOrderIds)) {
+                    $q->orWhereIn('order_id', $allOrderIds);
+                }
+            })
+            ->orderBy('number')
+            ->get()
+            ->groupBy(function (Ticket $t) use ($orderIdsByUser) {
+                if ($t->bot_user_id) {
+                    return $t->bot_user_id;
+                }
+                foreach ($orderIdsByUser as $uid => $oids) {
+                    $oids = is_array($oids) ? $oids : [$oids];
+                    if (in_array((int) $t->order_id, array_map('intval', $oids), true)) {
+                        return $uid;
+                    }
+                }
+                return 0;
+            });
+
+        foreach ($users as $user) {
+            $tickets = $ticketsByUser->get($user->id, collect());
+            $user->setRelation('tickets', $tickets);
+        }
+
+        return $users->values();
     }
 
     /**
