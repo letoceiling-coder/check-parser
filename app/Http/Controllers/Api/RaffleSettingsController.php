@@ -41,75 +41,88 @@ class RaffleSettingsController extends Controller
      */
     public function update(Request $request, int $id): JsonResponse
     {
-        $bot = TelegramBot::where('user_id', $request->user()->id)
-            ->where('id', $id)
-            ->firstOrFail();
+        try {
+            $bot = TelegramBot::where('user_id', $request->user()->id)
+                ->where('id', $id)
+                ->firstOrFail();
 
-        $settings = BotSettings::getOrCreate($bot->id);
+            $settings = BotSettings::getOrCreate($bot->id);
 
-        $validated = $request->validate([
-            'total_slots' => 'nullable|integer|min:1|max:10000',
-            'slot_price' => 'nullable|numeric|min:1',
-            'slots_mode' => 'nullable|in:sequential,random',
-            'is_active' => 'nullable|boolean',
-            'receipt_parser_method' => 'nullable|in:legacy,enhanced,enhanced_ai',
-            'payment_description' => 'nullable|string|max:255',
-            'support_contact' => 'nullable|string|max:255',
-            'raffle_info' => 'nullable|string|max:4000',
-            'prize_description' => 'nullable|string|max:500',
-            // Сообщения бота
-            'msg_welcome' => 'nullable|string|max:4000',
-            'msg_no_slots' => 'nullable|string|max:4000',
-            'msg_ask_fio' => 'nullable|string|max:4000',
-            'msg_ask_phone' => 'nullable|string|max:4000',
-            'msg_ask_inn' => 'nullable|string|max:4000',
-            'msg_confirm_data' => 'nullable|string|max:4000',
-            'msg_show_qr' => 'nullable|string|max:4000',
-            'msg_wait_check' => 'nullable|string|max:4000',
-            'msg_check_received' => 'nullable|string|max:4000',
-            'msg_check_approved' => 'nullable|string|max:4000',
-            'msg_check_rejected' => 'nullable|string|max:4000',
-            'msg_check_duplicate' => 'nullable|string|max:4000',
-            'msg_admin_request_sent' => 'nullable|string|max:4000',
-            'msg_admin_request_approved' => 'nullable|string|max:4000',
-            'msg_admin_request_rejected' => 'nullable|string|max:4000',
-            'msg_about_raffle' => 'nullable|string|max:4000',
-            'msg_my_tickets' => 'nullable|string|max:4000',
-            'msg_no_tickets' => 'nullable|string|max:4000',
-            'msg_support' => 'nullable|string|max:4000',
-        ]);
+            $validated = $request->validate([
+                'total_slots' => 'nullable|integer|min:1|max:10000',
+                'slot_price' => 'nullable|numeric|min:1',
+                'slots_mode' => 'nullable|in:sequential,random',
+                'is_active' => 'nullable|boolean',
+                'receipt_parser_method' => 'nullable|in:legacy,enhanced,enhanced_ai',
+                'payment_description' => 'nullable|string|max:255',
+                'support_contact' => 'nullable|string|max:255',
+                'raffle_info' => 'nullable|string|max:4000',
+                'prize_description' => 'nullable|string|max:500',
+                // Сообщения бота
+                'msg_welcome' => 'nullable|string|max:4000',
+                'msg_no_slots' => 'nullable|string|max:4000',
+                'msg_ask_fio' => 'nullable|string|max:4000',
+                'msg_ask_phone' => 'nullable|string|max:4000',
+                'msg_ask_inn' => 'nullable|string|max:4000',
+                'msg_confirm_data' => 'nullable|string|max:4000',
+                'msg_show_qr' => 'nullable|string|max:4000',
+                'msg_wait_check' => 'nullable|string|max:4000',
+                'msg_check_received' => 'nullable|string|max:4000',
+                'msg_check_approved' => 'nullable|string|max:4000',
+                'msg_check_rejected' => 'nullable|string|max:4000',
+                'msg_check_duplicate' => 'nullable|string|max:4000',
+                'msg_admin_request_sent' => 'nullable|string|max:4000',
+                'msg_admin_request_approved' => 'nullable|string|max:4000',
+                'msg_admin_request_rejected' => 'nullable|string|max:4000',
+                'msg_about_raffle' => 'nullable|string|max:4000',
+                'msg_my_tickets' => 'nullable|string|max:4000',
+                'msg_no_tickets' => 'nullable|string|max:4000',
+                'msg_support' => 'nullable|string|max:4000',
+            ]);
 
-        // Обновляем только переданные поля
-        $fillable = array_filter($validated, fn($v) => $v !== null);
-        $settings->fill($fillable);
-        $settings->save();
+            // Обновляем только переданные поля
+            $fillable = array_filter($validated, fn($v) => $v !== null);
+            $settings->fill($fillable);
+            $settings->save();
 
-        // Если изменилось количество мест — синхронизируем Raffle, уменьшаем лишние билеты или добавляем недостающие
-        if (isset($validated['total_slots'])) {
-            $newTotal = (int) $validated['total_slots'];
-            $raffleId = $settings->current_raffle_id;
-            if (!$raffleId) {
-                $raffle = Raffle::getCurrentForBot($bot->id);
-                $raffleId = $raffle?->id;
+            // Если изменилось количество мест — синхронизируем Raffle, уменьшаем лишние билеты или добавляем недостающие
+            if (isset($validated['total_slots'])) {
+                $newTotal = (int) $validated['total_slots'];
+                $raffleId = $settings->current_raffle_id;
+                if (!$raffleId) {
+                    $raffle = Raffle::getCurrentForBot($bot->id);
+                    $raffleId = $raffle?->id;
+                }
+                $raffleId = $raffleId !== null ? (int) $raffleId : null;
+                $currentCount = Ticket::where('telegram_bot_id', $bot->id)
+                    ->when($raffleId !== null, fn($q) => $q->where('raffle_id', $raffleId), fn($q) => $q->whereNull('raffle_id'))
+                    ->count();
+                if ($newTotal < $currentCount) {
+                    Ticket::reduceToTotal($bot->id, $newTotal, $raffleId);
+                }
+                Ticket::initializeForBot($bot->id, $newTotal, $raffleId);
+                // Бот показывает «Доступно мест» из Raffle.total_slots - tickets_issued, поэтому обновляем розыгрыш
+                if ($raffleId !== null) {
+                    Raffle::where('id', $raffleId)->update(['total_slots' => $newTotal]);
+                }
             }
-            $currentCount = Ticket::where('telegram_bot_id', $bot->id)
-                ->when($raffleId !== null, fn($q) => $q->where('raffle_id', $raffleId), fn($q) => $q->whereNull('raffle_id'))
-                ->count();
-            if ($newTotal < $currentCount) {
-                Ticket::reduceToTotal($bot->id, $newTotal, $raffleId);
-            }
-            Ticket::initializeForBot($bot->id, $newTotal, $raffleId);
-            // Бот показывает «Доступно мест» из Raffle.total_slots - tickets_issued, поэтому обновляем розыгрыш
-            if ($raffleId) {
-                Raffle::where('id', $raffleId)->update(['total_slots' => $newTotal]);
-            }
+
+            return response()->json([
+                'message' => 'Настройки сохранены',
+                'settings' => $settings->fresh(),
+                'tickets_stats' => Ticket::getStats($bot->id),
+            ]);
+        } catch (\Illuminate\Validation\ValidationException $e) {
+            throw $e;
+        } catch (\Throwable $e) {
+            Log::error('RaffleSettings update error: ' . $e->getMessage(), [
+                'exception' => $e,
+                'trace' => $e->getTraceAsString(),
+            ]);
+            return response()->json([
+                'message' => config('app.debug') ? $e->getMessage() : 'Ошибка при сохранении настроек',
+            ], 500);
         }
-
-        return response()->json([
-            'message' => 'Настройки сохранены',
-            'settings' => $settings->fresh(),
-            'tickets_stats' => Ticket::getStats($bot->id),
-        ]);
     }
 
     /**

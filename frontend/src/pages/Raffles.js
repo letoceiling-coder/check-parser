@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
+import * as XLSX from 'xlsx';
 
 const API_URL = process.env.REACT_APP_API_URL || window.location.origin;
 
@@ -14,6 +15,7 @@ function Raffles() {
   const [editTotalSlots, setEditTotalSlots] = useState('');
   const [saving, setSaving] = useState(false);
   const [editError, setEditError] = useState(null);
+  const [exportingRaffleId, setExportingRaffleId] = useState(null);
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -155,6 +157,42 @@ function Raffles() {
     }
   };
 
+  const downloadRaffleExcel = async (raffle, e) => {
+    if (e) e.stopPropagation();
+    if (!botId || exportingRaffleId) return;
+    setExportingRaffleId(raffle.id);
+    try {
+      const token = localStorage.getItem('token');
+      const response = await fetch(`${API_URL}/api/bot/${botId}/raffles/${raffle.id}`, {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Accept': 'application/json',
+        },
+      });
+      if (!response.ok) throw new Error('Ошибка загрузки участников');
+      const data = await response.json();
+      const participants = data.participants || [];
+      const headerRow = ['телефон', 'фамилия имя отчество', 'номерки'];
+      const dataRows = participants.map((p) => {
+        const phone = p.phone ?? '';
+        const fio = p.fio ?? '';
+        const numbers = (p.tickets || []).map((t) => t.number).sort((a, b) => a - b).join(', ');
+        return [phone, fio, numbers];
+      });
+      const wsData = [headerRow, ...dataRows];
+      const ws = XLSX.utils.aoa_to_sheet(wsData);
+      const wb = XLSX.utils.book_new();
+      const safeName = (raffle.name || `Розыгрыш_${raffle.id}`).replace(/[\\/*?:\[\]]/g, '_').slice(0, 31);
+      XLSX.utils.book_append_sheet(wb, ws, safeName);
+      XLSX.writeFile(wb, `участники_${safeName}.xlsx`);
+    } catch (err) {
+      console.error('Export error:', err);
+      setError('Не удалось скачать список участников');
+    } finally {
+      setExportingRaffleId(null);
+    }
+  };
+
   if (loading) {
     return (
       <div className="flex justify-center items-center h-64">
@@ -286,13 +324,23 @@ function Raffles() {
                     )}
                   </td>
                   <td className="px-6 py-4">
-                    <button
-                      type="button"
-                      onClick={(e) => openEditModal(raffle, e)}
-                      className="text-indigo-600 hover:text-indigo-800 font-medium text-sm"
-                    >
-                      ✏️ Изменить
-                    </button>
+                    <div className="flex flex-col gap-1">
+                      <button
+                        type="button"
+                        onClick={(e) => openEditModal(raffle, e)}
+                        className="text-indigo-600 hover:text-indigo-800 font-medium text-sm text-left"
+                      >
+                        ✏️ Изменить
+                      </button>
+                      <button
+                        type="button"
+                        onClick={(e) => downloadRaffleExcel(raffle, e)}
+                        disabled={exportingRaffleId === raffle.id}
+                        className="text-green-600 hover:text-green-800 font-medium text-sm text-left disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        {exportingRaffleId === raffle.id ? '⏳ Загрузка...' : '📥 Скачать Excel'}
+                      </button>
+                    </div>
                   </td>
                 </tr>
               ))}
