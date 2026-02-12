@@ -212,16 +212,19 @@ class Raffle extends Model
             $query->where('raffle_id', $this->id);
         })->count();
 
-        // Учитываем и проданные (bot_user_id), и забронированные (order_id) билеты
+        // Учитываем только реально выданные билеты (с bot_user_id)
+        // Билеты с order_id но без bot_user_id - это только бронь, они не считаются выданными
         $this->tickets_issued = $this->tickets()
-            ->where(function ($q) {
-                $q->whereNotNull('bot_user_id')->orWhereNotNull('order_id');
-            })
+            ->whereNotNull('bot_user_id')
             ->count();
         
+        // Используем итоговую сумму с учетом коррекции админом
         $this->total_revenue = $this->checks()
             ->where('review_status', 'approved')
-            ->sum('amount');
+            ->get()
+            ->sum(function ($check) {
+                return $check->admin_edited_amount ?? $check->corrected_amount ?? $check->amount ?? 0;
+            });
         
         $this->checks_count = $this->checks()->count();
         

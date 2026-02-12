@@ -809,14 +809,46 @@ class TelegramWebhookController extends Controller
                     'file_hash' => $fileHash,
                     'operation_id' => $operationId,
                     'unique_key' => $uniqueKey,
+                    'original_review_status' => $duplicateOriginal->review_status,
                 ]);
                 
-                // Удаляем загруженный файл
-                Storage::disk('local')->delete($filePath);
+                // Проверяем, был ли чек уже одобрен и использован (выданы билеты)
+                $isAlreadyUsed = $duplicateOriginal->review_status === 'approved' && 
+                                 $duplicateOriginal->tickets()->whereNotNull('bot_user_id')->exists();
+                
+                // Создаем запись о дубликате для отслеживания
+                $duplicateCheck = Check::create([
+                    'telegram_bot_id' => $bot->id,
+                    'raffle_id' => $duplicateOriginal->raffle_id,
+                    'bot_user_id' => $botUser->id,
+                    'chat_id' => $chatId,
+                    'username' => $userData['username'],
+                    'first_name' => $userData['first_name'],
+                    'file_path' => $filePath, // Сохраняем файл для админ-панели
+                    'file_type' => $checkRecord['file_type'],
+                    'file_size' => $file['file_size'] ?? null,
+                    'file_hash' => $fileHash,
+                    'operation_id' => $operationId,
+                    'unique_key' => $uniqueKey,
+                    'is_duplicate' => true,
+                    'original_check_id' => $duplicateOriginal->id,
+                    'amount' => $checkData['amount'] ?? null,
+                    'bank_code' => $checkData['bank_code'] ?? null,
+                    'check_date' => $checkData['date'] ?? null,
+                    'ocr_method' => $checkData['ocr_method'] ?? null,
+                    'raw_text' => isset($checkData['raw_text']) ? substr($checkData['raw_text'], 0, 5000) : null,
+                    'review_status' => 'rejected', // Дубликат автоматически отклоняется
+                    'status' => $checkData ? 'success' : 'failed',
+                ]);
                 
                 // Уведомляем пользователя
-                $duplicateMessage = $this->getDuplicateCheckMessage($settings, $duplicateOriginal);
+                $duplicateMessage = $this->getDuplicateCheckMessage($settings, $duplicateOriginal, $isAlreadyUsed);
                 $this->sendMessage($bot, $chatId, $duplicateMessage);
+                
+                // Уведомляем администраторов о попытке повторного использования
+                if ($isAlreadyUsed) {
+                    $this->notifyAdminsAboutDuplicateCheck($bot, $duplicateCheck, $duplicateOriginal, $botUser);
+                }
                 
                 return;
             }
@@ -902,20 +934,95 @@ class TelegramWebhookController extends Controller
     /**
      * Get message for duplicate check
      */
-    private function getDuplicateCheckMessage(BotSettings $settings, Check $originalCheck): string
+    private function getDuplicateCheckMessage(BotSettings $settings, Check $originalCheck, bool $isAlreadyUsed = false): string
     {
         // Определяем информацию о статусе оригинального чека
+        if ($isAlreadyUsed) {
+            $ticketsCount = $originalCheck->tickets()->whereNotNull('bot_user_id')->count();
+            $ticketNumbers = $originalCheck->tickets()
+                ->whereNotNull('bot_user_id')
+                ->orderBy('number')
+                ->pluck('number')
+                ->toArray();
+            $ticketsStr = !empty($ticketNumbers) ? ' №' . implode(', №', $ticketNumbers) : '';
+            
+            $statusInfo = "⚠️ Этот чек уже был использован!\n\n" .
+                         "Чек был одобрен ранее и по нему уже выданы {$ticketsCount} номерок(ов){$ticketsStr}.\n\n" .
+                         "Один чек можно использовать только один раз. Пожалуйста, отправьте другой чек для участия в розыгрыше.";
+        } else {
         $statusInfo = match ($originalCheck->review_status) {
             'approved' => "Данный чек был одобрен ранее и по нему уже выданы номерки.",
             'pending' => "Данный чек уже находится на проверке.\nДождитесь результата проверки или отправьте другой чек.",
             'rejected' => "Данный чек был ранее отклонён.\nЕсли вы считаете это ошибкой, обратитесь к администратору.",
             default => "Данный чек уже был отправлен ранее.",
         };
+        }
         
         // Используем настраиваемое сообщение или дефолтное
         return $settings->getMessage('check_duplicate', [
             'status_info' => $statusInfo,
         ]);
+    }
+    
+    /**
+     * Уведомить администраторов о попытке повторного использования чека
+     */
+    private function notifyAdminsAboutDuplicateCheck(TelegramBot $bot, Check $duplicateCheck, Check $originalCheck, BotUser $user): void
+    {
+        $admins = BotUser::where('telegram_bot_id', $bot->id)
+            ->where('role', BotUser::ROLE_ADMIN)
+            ->get();
+        
+        if ($admins->isEmpty()) {
+            Log::warning('No admins to notify about duplicate check', ['duplicate_check_id' => $duplicateCheck->id]);
+            return;
+        }
+        
+        $ticketsCount = $originalCheck->tickets()->whereNotNull('bot_user_id')->count();
+        $ticketNumbers = $originalCheck->tickets()
+            ->whereNotNull('bot_user_id')
+            ->orderBy('number')
+            ->pluck('number')
+            ->toArray();
+        $ticketsStr = !empty($ticketNumbers) ? ' №' . implode(', №', $ticketNumbers) : '';
+        
+        $message = "⚠️ ПОПЫТКА ПОВТОРНОГО ИСПОЛЬЗОВАНИЯ ЧЕКА!\n\n" .
+            "👤 Пользователь: " . ($user->first_name ?? 'Неизвестен');
+        if ($user->username) {
+            $message .= " (@" . $user->username . ")";
+        }
+        $message .= "\n" .
+            "📱 ID: {$user->telegram_user_id}\n\n" .
+            "🔄 Оригинальный чек:\n" .
+            "   • ID: #{$originalCheck->id}\n" .
+            "   • Сумма: " . ($originalCheck->final_amount ? number_format($originalCheck->final_amount, 2, ',', ' ') . ' ₽' : '—') . "\n" .
+            "   • Дата: " . ($originalCheck->check_date ? $originalCheck->check_date->format('d.m.Y H:i') : '—') . "\n" .
+            "   • Выдано номерков: {$ticketsCount}{$ticketsStr}\n" .
+            "   • Статус: Одобрен\n\n" .
+            "🆕 Попытка повторного использования:\n" .
+            "   • Дубликат ID: #{$duplicateCheck->id}\n" .
+            "   • Время: " . $duplicateCheck->created_at->format('d.m.Y H:i:s') . "\n\n" .
+            "Чек автоматически отклонён. Проверьте в админ-панели.";
+        
+        $keyboard = [
+            'inline_keyboard' => [
+                [
+                    ['text' => '👁 Просмотр в админ-панели', 'url' => config('app.url') . '/checks?check_id=' . $duplicateCheck->id]
+                ]
+            ]
+        ];
+        
+        foreach ($admins as $admin) {
+            try {
+                $this->sendMessageWithKeyboard($bot, $admin->telegram_user_id, $message, $keyboard);
+            } catch (\Exception $e) {
+                Log::error('Failed to notify admin about duplicate check', [
+                    'admin_id' => $admin->id,
+                    'duplicate_check_id' => $duplicateCheck->id,
+                    'error' => $e->getMessage(),
+                ]);
+            }
+        }
     }
     
     /**

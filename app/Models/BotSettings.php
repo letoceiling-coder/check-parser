@@ -239,10 +239,10 @@ class BotSettings extends Model
             return 0;
         }
         $raffle->refresh();
+        // Учитываем только реально выданные билеты (с bot_user_id)
+        // Билеты с order_id но без bot_user_id - это только бронь, они не считаются выданными
         $issuedCount = Ticket::where('raffle_id', $raffle->id)
-            ->where(function ($q) {
-                $q->whereNotNull('bot_user_id')->orWhereNotNull('order_id');
-            })
+            ->whereNotNull('bot_user_id')
             ->count();
         return max(0, (int) $raffle->total_slots - $issuedCount);
     }

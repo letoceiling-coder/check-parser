@@ -5,17 +5,35 @@ namespace App\Console\Commands;
 use App\Models\Raffle;
 use App\Models\Ticket;
 use App\Models\Order;
+use App\Models\Check;
+use App\Models\BotUser;
 use Illuminate\Console\Command;
 
 class DiagnoseRaffleCommand extends Command
 {
-    protected $signature = 'raffle:diagnose {raffle_id=1} {--fix : Автоматически исправить проблемы}';
+    protected $signature = 'raffle:diagnose {raffle_id?} {--fix : Автоматически исправить проблемы} {--active : Проверить активный розыгрыш}';
     protected $description = 'Диагностика проблем с розыгрышем и билетами';
 
     public function handle(): int
     {
         $raffleId = $this->argument('raffle_id');
+        
+        // Если указан --active или не указан raffle_id, используем активный розыгрыш
+        if ($this->option('active') || !$raffleId) {
+            $bot = \App\Models\TelegramBot::first();
+            if (!$bot) {
+                $this->error("Бот не найден");
+                return 1;
+            }
+            $raffle = Raffle::resolveActiveForBot($bot->id);
+            if (!$raffle) {
+                $this->error("Активный розыгрыш не найден");
+                return 1;
+            }
+            $this->info("Используется активный розыгрыш для бота #{$bot->id}");
+        } else {
         $raffle = Raffle::find($raffleId);
+        }
         
         if (!$raffle) {
             $this->error("Розыгрыш #{$raffleId} не найден");
@@ -41,6 +59,35 @@ class DiagnoseRaffleCommand extends Command
         $this->line("Свободных (NULL/NULL): {$freeTickets}");
         $this->line("Забронировано (order_id/NULL user): {$reservedTickets}");
         $this->line("Продано (user_id SET): {$soldTickets}");
+        
+        // Реальные данные для сравнения
+        // Учитываем только реально выданные билеты (с bot_user_id)
+        // Билеты с order_id но без bot_user_id - это только бронь, они не считаются выданными
+        $actualIssued = Ticket::where('raffle_id', $raffle->id)
+            ->whereNotNull('bot_user_id')
+            ->count();
+        $actualParticipants = BotUser::whereHas('tickets', function ($query) use ($raffle) {
+            $query->where('raffle_id', $raffle->id);
+        })->count();
+        $actualRevenue = Check::where('raffle_id', $raffle->id)
+            ->where('review_status', 'approved')
+            ->get()
+            ->sum(function ($check) {
+                return $check->admin_edited_amount ?? $check->corrected_amount ?? $check->amount ?? 0;
+            });
+        $actualChecksCount = Check::where('raffle_id', $raffle->id)->count();
+        
+        $this->newLine();
+        $this->info("=== Сравнение кэша и реальных данных ===");
+        $this->line("Участники: кэш={$raffle->total_participants}, реально={$actualParticipants} " . 
+            ($raffle->total_participants == $actualParticipants ? "✅" : "❌"));
+        $this->line("Выдано билетов: кэш={$raffle->tickets_issued}, реально={$actualIssued} " . 
+            ($raffle->tickets_issued == $actualIssued ? "✅" : "❌"));
+        $this->line("Выручка: кэш={$raffle->total_revenue}, реально={$actualRevenue} " . 
+            (abs($raffle->total_revenue - $actualRevenue) < 0.01 ? "✅" : "❌"));
+        $this->line("Чеков: кэш={$raffle->checks_count}, реально={$actualChecksCount} " . 
+            ($raffle->checks_count == $actualChecksCount ? "✅" : "❌"));
+        $this->line("Доступно мест: " . ($raffle->total_slots - $actualIssued));
         $this->newLine();
         
         // Проблемы
@@ -64,10 +111,33 @@ class DiagnoseRaffleCommand extends Command
             $problems[] = "Найдено {$expiredOrders} просроченных броней (нужно очистить)";
         }
         
-        if (!empty($problems)) {
+        // Проверяем расхождения в статистике
+        $hasMismatch = false;
+        if ($raffle->total_participants != $actualParticipants) {
+            $hasMismatch = true;
+            $problems[] = "Участники: кэш={$raffle->total_participants}, реально={$actualParticipants}";
+        }
+        if ($raffle->tickets_issued != $actualIssued) {
+            $hasMismatch = true;
+            $problems[] = "Выдано билетов: кэш={$raffle->tickets_issued}, реально={$actualIssued}";
+        }
+        $revenueDiff = abs($raffle->total_revenue - $actualRevenue);
+        if ($revenueDiff > 0.01) {
+            $hasMismatch = true;
+            $problems[] = "Выручка: кэш={$raffle->total_revenue}, реально={$actualRevenue}";
+        }
+        if ($raffle->checks_count != $actualChecksCount) {
+            $hasMismatch = true;
+            $problems[] = "Чеков: кэш={$raffle->checks_count}, реально={$actualChecksCount}";
+        }
+
+        if (!empty($problems) || $hasMismatch) {
             $this->error("=== Обнаружены проблемы ===");
             foreach ($problems as $problem) {
                 $this->line("❌ {$problem}");
+            }
+            if ($hasMismatch && !in_array("Выдано билетов", array_map(fn($p) => substr($p, 0, 20), $problems))) {
+                $this->line("❌ Обнаружены расхождения в статистике");
             }
             $this->newLine();
             
@@ -129,14 +199,18 @@ class DiagnoseRaffleCommand extends Command
             $this->info("✅ Создано {$missing} билетов");
         }
         
-        // 3. Пересчёт tickets_issued
-        $actualIssued = $raffle->tickets()->whereNotNull('bot_user_id')->count();
-        if ($raffle->tickets_issued != $actualIssued) {
-            $this->line("Корректировка tickets_issued: {$raffle->tickets_issued} -> {$actualIssued}");
-            $raffle->tickets_issued = $actualIssued;
-            $raffle->save();
-            $this->info("✅ tickets_issued обновлён");
-        }
+        // 3. Пересчёт всей статистики (всегда обновляем при --fix)
+        $this->line("Пересчёт статистики розыгрыша...");
+        $raffle->updateStatistics();
+        $raffle->refresh();
+        $this->info("✅ Статистика обновлена");
+        
+        $this->line("Новые значения:");
+        $this->line("  - Участников: {$raffle->total_participants}");
+        $this->line("  - Выдано билетов: {$raffle->tickets_issued}");
+        $this->line("  - Выручка: {$raffle->total_revenue} ₽");
+        $this->line("  - Чеков: {$raffle->checks_count}");
+        $this->line("  - Доступно мест: " . ($raffle->total_slots - $raffle->tickets_issued));
         
         $this->newLine();
         $this->info("🎉 Исправление завершено!");

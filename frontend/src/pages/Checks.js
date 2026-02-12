@@ -15,6 +15,7 @@ function Checks() {
   const [filters, setFilters] = useState({
     status: 'all',
     ocr_method: 'all',
+    is_duplicate: 'all',
     search: '',
   });
   
@@ -438,6 +439,18 @@ function Checks() {
               <option value="extractTextWithGoogleVision">Google Vision</option>
             </select>
           </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Дубликаты</label>
+            <select
+              value={filters.is_duplicate}
+              onChange={(e) => handleFilterChange('is_duplicate', e.target.value)}
+              className="border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+            >
+              <option value="all">Все</option>
+              <option value="0">Оригинальные</option>
+              <option value="1">Только дубликаты</option>
+            </select>
+          </div>
           <div className="flex-1 min-w-[200px]">
             <label className="block text-sm font-medium text-gray-700 mb-1">Поиск</label>
             <input
@@ -492,11 +505,26 @@ function Checks() {
                 </tr>
               ) : (
                 checks.map((check) => (
-                  <tr key={check.id} className="hover:bg-blue-50 transition-colors">
-                    <td className="px-4 py-3 text-sm font-medium text-gray-900">#{check.id}</td>
+                  <tr key={check.id} className={`hover:bg-blue-50 transition-colors ${check.is_duplicate ? 'bg-red-50' : ''}`}>
+                    <td className="px-4 py-3 text-sm font-medium text-gray-900">
+                      #{check.id}
+                      {check.is_duplicate && (
+                        <span className="ml-2 px-2 py-0.5 bg-red-200 text-red-800 text-xs rounded-full font-semibold">
+                          🔄 ДУБЛИКАТ
+                        </span>
+                      )}
+                    </td>
                     <td className="px-4 py-3 text-sm text-gray-600">{formatDate(check.created_at)}</td>
                     <td className="px-4 py-3 text-sm">
                       <div className="font-medium text-gray-900">{check.first_name || '—'}</div>
+                      {check.is_duplicate && check.original_check && (
+                        <div className="text-xs text-red-600 mt-1">
+                          Оригинал: <Link to={`/checks/${check.original_check.id}`} className="underline font-medium">#{check.original_check.id}</Link>
+                          {check.original_check.review_status === 'approved' && (
+                            <span className="ml-2 text-red-700 font-semibold">(Уже использован)</span>
+                          )}
+                        </div>
+                      )}
                       <div className="text-gray-500 text-xs">@{check.username || check.chat_id}</div>
                     </td>
                     <td className="px-4 py-3">

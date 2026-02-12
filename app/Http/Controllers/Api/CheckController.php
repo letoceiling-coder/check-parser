@@ -28,7 +28,7 @@ class CheckController extends Controller
             return response()->json(['data' => [], 'current_page' => 1, 'last_page' => 1, 'total' => 0, 'per_page' => (int) $request->get('per_page', 20)]);
         }
 
-        $query = Check::with('telegramBot')
+        $query = Check::with(['telegramBot', 'originalCheck', 'duplicates'])
             ->where('telegram_bot_id', $bot->id)
             ->orderBy('created_at', 'desc');
 
@@ -48,6 +48,15 @@ class CheckController extends Controller
         // Фильтр по статусу
         if ($request->has('status') && $request->status !== 'all') {
             $query->where('status', $request->status);
+        }
+
+        // Фильтр по дубликатам
+        if ($request->has('is_duplicate')) {
+            if ($request->is_duplicate === '1' || $request->is_duplicate === 'true') {
+                $query->where('is_duplicate', true);
+            } elseif ($request->is_duplicate === '0' || $request->is_duplicate === 'false') {
+                $query->where('is_duplicate', false);
+            }
         }
 
         // Фильтр по OCR методу

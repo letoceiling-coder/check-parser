@@ -32,6 +32,10 @@ class RaffleController extends Controller
 
         // Получаем текущий активный розыгрыш (единственный источник — ActiveRaffleResolver)
         $currentRaffle = Raffle::resolveActiveForBot($bot->id);
+        if ($currentRaffle) {
+            $currentRaffle->updateStatistics();
+            $currentRaffle->refresh();
+        }
 
         return response()->json([
             'raffles' => $raffles,
