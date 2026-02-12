@@ -20,13 +20,13 @@ fi
 
 echo "=== Setting up deploy for $PROJECT_ROOT (web user: $WEB_USER) ==="
 
-# 1. Git: разрешить репозиторий для пользователя веб-сервера (уберет "dubious ownership")
-sudo -u "$WEB_USER" git config --global --add safe.directory "$PROJECT_ROOT"
-echo "Git safe.directory added for $WEB_USER"
-
-# 2. Владелец проекта — пользователь веб-сервера (чтобы PHP-FPM мог писать в public/ и выполнять git)
+# 1. Владелец проекта — пользователь веб-сервера (чтобы PHP-FPM мог писать в public/ и выполнять git)
 chown -R "$WEB_USER:$WEB_USER" "$PROJECT_ROOT"
 echo "Ownership set to $WEB_USER:$WEB_USER"
+
+# 2. Git: разрешить репозиторий для пользователя веб-сервера (уберет "dubious ownership"), запись в .git проекта
+sudo -u "$WEB_USER" git -C "$PROJECT_ROOT" config --local --add safe.directory "$PROJECT_ROOT"
+echo "Git safe.directory added (local) for $WEB_USER"
 
 # 3. Права на storage и cache
 chmod -R 775 "$PROJECT_ROOT/storage" "$PROJECT_ROOT/bootstrap/cache" 2>/dev/null || true
