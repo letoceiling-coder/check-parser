@@ -53,8 +53,19 @@ class RaffleController extends Controller
             ->with(['winnerUser', 'winnerTicket', 'checks', 'tickets'])
             ->firstOrFail();
 
-        // Получаем участников с их номерками
-        $participants = $raffle->getParticipants();
+        // Получаем участников с их номерками (явно добавляем phone и fio — они accessors и не попадают в toArray по умолчанию)
+        $participantsList = $raffle->getParticipants();
+        $participants = $participantsList->map(function ($user) {
+            return [
+                'id' => $user->id,
+                'phone' => $user->phone,
+                'fio' => $user->fio,
+                'first_name' => $user->first_name,
+                'last_name' => $user->last_name,
+                'username' => $user->username,
+                'tickets' => $user->tickets->map(fn ($t) => ['id' => $t->id, 'number' => $t->number])->values()->all(),
+            ];
+        })->values()->all();
 
         // Статистика
         $stats = [
