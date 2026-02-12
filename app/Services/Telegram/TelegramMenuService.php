@@ -4,6 +4,7 @@ namespace App\Services\Telegram;
 
 use App\Models\BotSettings;
 use App\Models\BotUser;
+use App\Models\Raffle;
 use App\Models\TelegramBot;
 use App\Models\Ticket;
 use Illuminate\Support\Facades\Http;
@@ -235,11 +236,12 @@ class TelegramMenuService
      */
     public function handleAboutRaffle(int $chatId, BotUser $botUser): void
     {
+        $raffle = $this->settings?->getActiveRaffle();
         $availableSlots = $this->settings ? $this->settings->getAvailableSlotsCount() : 0;
-        $totalSlots = $this->settings->total_slots ?? 500;
-        $price = $this->settings->slot_price ?? 10000;
-        $prize = $this->settings->prize_description ?? 'Главный приз';
-        $raffleInfo = $this->settings->raffle_info ?? '';
+        $totalSlots = $raffle ? (int) $raffle->total_slots : ($this->settings->total_slots ?? 500);
+        $price = $raffle ? (float) $raffle->slot_price : ($this->settings->slot_price ?? 10000);
+        $prize = $raffle?->prize_description ?? $this->settings->prize_description ?? 'Главный приз';
+        $raffleInfo = $raffle?->raffle_info ?? $this->settings->raffle_info ?? '';
 
         $message = $this->settings->getMessage('about_raffle', [
             'prize' => $prize,

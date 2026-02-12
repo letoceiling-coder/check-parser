@@ -516,7 +516,7 @@ class TelegramWebhookController extends Controller
                     }
                     
                     // Рассчитываем сумму
-                    $amount = $quantity * $settings->slot_price;
+                    $amount = $quantity * $settings->getEffectiveSlotPrice();
                     
                     // Сохраняем данные и переходим к подтверждению
                     $botUser->setFsmData([
@@ -662,7 +662,7 @@ class TelegramWebhookController extends Controller
         }
 
         $msg = $settings->msg_show_qr ?? "Оплатите {price} руб по QR-коду.\n\nНазначение платежа: {payment_description}\n\nПосле оплаты отправьте чек в формате PDF.";
-        $msg = str_replace('{price}', number_format($settings->slot_price, 0, ',', ' '), $msg);
+        $msg = str_replace('{price}', number_format($settings->getEffectiveSlotPrice(), 0, ',', ' '), $msg);
         $msg = str_replace('{payment_description}', $settings->payment_description ?? 'За наклейку', $msg);
 
         if ($botUser->last_bot_message_id) {
@@ -3788,12 +3788,12 @@ PYTHON;
         }
 
         $amount = $check->admin_edited_amount ?? $check->amount;
-        if (!$amount || $amount < $settings->slot_price) {
-            $this->editAdminNotificationMessage($bot, $chatId, $messageId, "❌ Сумма ({$amount} ₽) меньше стоимости одного места ({$settings->slot_price} ₽).\n\nИспользуйте админ-панель для редактирования суммы.", $emptyKeyboard, $isCaption);
+        if (!$amount || $amount < $settings->getEffectiveSlotPrice()) {
+            $this->editAdminNotificationMessage($bot, $chatId, $messageId, "❌ Сумма ({$amount} ₽) меньше стоимости одного места ({$settings->getEffectiveSlotPrice()} ₽).\n\nИспользуйте админ-панель для редактирования суммы.", $emptyKeyboard, $isCaption);
             return;
         }
 
-        $ticketsCount = floor($amount / $settings->slot_price);
+        $ticketsCount = floor($amount / $settings->getEffectiveSlotPrice());
         $availableSlots = $settings->getAvailableSlotsCount();
 
         if ($ticketsCount > $availableSlots) {
@@ -4589,7 +4589,7 @@ PYTHON;
             "Доступно мест: {available_slots}\n\n" .
             "Выберите количество или введите число:";
         
-        $message = str_replace('{price}', number_format($settings->slot_price, 0, '', ' '), $message);
+        $message = str_replace('{price}', number_format($settings->getEffectiveSlotPrice(), 0, '', ' '), $message);
         $message = str_replace('{available_slots}', $availableSlots, $message);
         
         // Кнопки быстрого выбора
@@ -4646,7 +4646,7 @@ PYTHON;
         }
         
         // Рассчитываем сумму
-        $amount = $quantity * $settings->slot_price;
+        $amount = $quantity * $settings->getEffectiveSlotPrice();
         
         // Сохраняем данные в FSM
         $botUser->fsm_data = array_merge($botUser->fsm_data ?? [], [

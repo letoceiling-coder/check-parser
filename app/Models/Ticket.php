@@ -237,13 +237,15 @@ class Ticket extends Model
     }
 
     /**
-     * Получить количество выданных номерков
+     * Получить количество выданных номерков (опционально по розыгрышу)
      */
-    public static function getIssuedCount(int $telegramBotId): int
+    public static function getIssuedCount(int $telegramBotId, ?int $raffleId = null): int
     {
-        return self::where('telegram_bot_id', $telegramBotId)
-            ->whereNotNull('bot_user_id')
-            ->count();
+        $q = self::where('telegram_bot_id', $telegramBotId)->whereNotNull('bot_user_id');
+        if ($raffleId !== null) {
+            $q->where('raffle_id', $raffleId);
+        }
+        return $q->count();
     }
 
     /**
@@ -266,12 +268,14 @@ class Ticket extends Model
     }
 
     /**
-     * Получить статистику по номеркам
+     * Получить статистику по номеркам (опционально по розыгрышу)
      */
-    public static function getStats(int $telegramBotId): array
+    public static function getStats(int $telegramBotId, ?int $raffleId = null): array
     {
-        $total = self::where('telegram_bot_id', $telegramBotId)->count();
-        $issued = self::getIssuedCount($telegramBotId);
+        $total = self::where('telegram_bot_id', $telegramBotId)
+            ->when($raffleId !== null, fn ($q) => $q->where('raffle_id', $raffleId))
+            ->count();
+        $issued = self::getIssuedCount($telegramBotId, $raffleId);
         $available = $total - $issued;
 
         return [

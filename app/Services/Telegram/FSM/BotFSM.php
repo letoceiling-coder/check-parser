@@ -359,7 +359,7 @@ class BotFSM
      */
     public function calculateOrderAmount(int $quantity): float
     {
-        return $quantity * $this->settings->slot_price;
+        return $quantity * $this->settings->getEffectiveSlotPrice();
     }
 
     /**

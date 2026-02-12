@@ -1,9 +1,11 @@
 import React, { useState, useEffect } from 'react';
+import { Link } from 'react-router-dom';
 
 const API_URL = process.env.REACT_APP_API_URL || window.location.origin;
 
 function RaffleSettings({ bot }) {
   const [settings, setSettings] = useState(null);
+  const [currentRaffle, setCurrentRaffle] = useState(null);
   const [ticketsStats, setTicketsStats] = useState(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -44,6 +46,7 @@ function RaffleSettings({ bot }) {
       const data = await response.json().catch(() => ({}));
       if (response.ok) {
         setSettings(data.settings);
+        setCurrentRaffle(data.current_raffle || null);
         setTicketsStats(data.tickets_stats);
 
         // Заполняем форму
@@ -111,6 +114,7 @@ function RaffleSettings({ bot }) {
       if (response.ok) {
         setSuccess('Настройки сохранены!');
         setSettings(data.settings);
+        if (data.current_raffle) setCurrentRaffle(data.current_raffle);
         setTicketsStats(data.tickets_stats);
       } else {
         setError(data.message || 'Ошибка сохранения');
@@ -189,6 +193,18 @@ function RaffleSettings({ bot }) {
 
   return (
     <div className="space-y-6">
+      {/* Активный розыгрыш */}
+      {currentRaffle && (
+        <div className="bg-indigo-50 border border-indigo-200 rounded-lg px-4 py-3 text-indigo-800">
+          <p className="font-medium">
+            Настройки для активного розыгрыша: <strong>{currentRaffle.name || `Розыгрыш #${currentRaffle.id}`}</strong> (ID: {currentRaffle.id})
+          </p>
+          <p className="text-sm mt-1 opacity-90">
+            Активный розыгрыш выбирается на странице <Link to="/raffles" className="underline font-medium">Розыгрыши</Link>. Телеграм-бот работает только с активным розыгрышем.
+          </p>
+        </div>
+      )}
+
       {/* Заголовок */}
       <div className="flex justify-between items-center">
         <h2 className="text-2xl font-bold text-gray-800">🎯 Настройки розыгрыша</h2>

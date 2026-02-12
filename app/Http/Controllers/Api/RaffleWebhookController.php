@@ -347,8 +347,8 @@ class RaffleWebhookController extends Controller
             . "🎯 /start - Начать участие в розыгрыше\n"
             . "📊 /status - Проверить свои номерки\n"
             . "❓ /help - Эта справка\n\n"
-            . "💰 Стоимость участия: " . number_format($this->settings->slot_price, 0, '', ' ') . " ₽ = 1 номерок\n"
-            . "📊 Свободных мест: " . $this->settings->getAvailableSlotsCount() . " из " . $this->settings->total_slots;
+            . "💰 Стоимость участия: " . number_format($this->settings->getEffectiveSlotPrice(), 0, '', ' ') . " ₽ = 1 номерок\n"
+            . "📊 Свободных мест: " . $this->settings->getAvailableSlotsCount() . " из " . $this->settings->getEffectiveTotalSlots();
 
         $this->telegram->sendMessageWithReplyKeyboard($chatId, $message);
     }
@@ -801,7 +801,7 @@ class RaffleWebhookController extends Controller
             $this->telegram->sendMessage(
                 $this->botUser->telegram_user_id,
                 "❌ Сумма {$amount} ₽ недостаточна для выдачи номерков.\n"
-                . "Минимальная сумма: {$this->settings->slot_price} ₽\n\n"
+                . "Минимальная сумма: {$this->settings->getEffectiveSlotPrice()} ₽\n\n"
                 . "Отредактируйте сумму или отклоните чек."
             );
             return;

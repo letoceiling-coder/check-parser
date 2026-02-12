@@ -25,10 +25,34 @@ class RaffleSettingsController extends Controller
                 ->firstOrFail();
 
             $settings = BotSettings::getOrCreate($bot->id);
-            $ticketsStats = Ticket::getStats($bot->id);
+            $activeRaffle = Raffle::getCurrentForBot($bot->id);
+            if (!$activeRaffle) {
+                $activeRaffle = Raffle::getOrCreateForBot($bot->id);
+            }
+            if ($activeRaffle && (int) $settings->current_raffle_id !== (int) $activeRaffle->id) {
+                $settings->current_raffle_id = $activeRaffle->id;
+                $settings->save();
+            }
+
+            $ticketsStats = Ticket::getStats($bot->id, $activeRaffle?->id);
+
+            $settingsArray = $settings->toArray();
+            if ($activeRaffle) {
+                $settingsArray['total_slots'] = $activeRaffle->total_slots;
+                $settingsArray['slot_price'] = $activeRaffle->slot_price;
+                $settingsArray['slots_mode'] = $activeRaffle->slots_mode ?? $settings->slots_mode;
+                $settingsArray['raffle_info'] = $activeRaffle->raffle_info ?? $settings->raffle_info;
+                $settingsArray['prize_description'] = $activeRaffle->prize_description ?? $settings->prize_description;
+            }
 
             return response()->json([
-                'settings' => $settings,
+                'settings' => $settingsArray,
+                'current_raffle' => $activeRaffle ? [
+                    'id' => $activeRaffle->id,
+                    'name' => $activeRaffle->name,
+                    'total_slots' => $activeRaffle->total_slots,
+                    'slot_price' => $activeRaffle->slot_price,
+                ] : null,
                 'tickets_stats' => $ticketsStats,
                 'qr_image_url' => $settings->getQrImageUrl(),
                 'default_messages' => BotSettings::DEFAULTS,
@@ -88,39 +112,59 @@ class RaffleSettingsController extends Controller
                 'msg_support' => 'nullable|string|max:4000',
             ]);
 
-            // Обновляем только переданные поля, которые есть в модели
+            $activeRaffle = Raffle::getCurrentForBot($bot->id);
+            if (!$activeRaffle) {
+                $activeRaffle = Raffle::getOrCreateForBot($bot->id);
+            }
+            if ($activeRaffle && (int) $settings->current_raffle_id !== (int) $activeRaffle->id) {
+                $settings->current_raffle_id = $activeRaffle->id;
+                $settings->save();
+            }
+
+            $raffleFields = ['total_slots', 'slot_price', 'slots_mode', 'raffle_info', 'prize_description'];
+            $rafflePayload = array_intersect_key($validated, array_flip($raffleFields));
+            $rafflePayload = array_filter($rafflePayload, fn ($v) => $v !== null);
+            if ($activeRaffle && !empty($rafflePayload)) {
+                $activeRaffle->update($rafflePayload);
+            }
+
             $allowed = array_flip($settings->getFillable());
-            $toFill = array_filter($validated, fn($v) => $v !== null);
+            $toFill = array_filter($validated, fn ($v) => $v !== null);
+            $toFill = array_diff_key($toFill, array_flip($raffleFields));
             $toFill = array_intersect_key($toFill, $allowed);
             $settings->fill($toFill);
             $settings->save();
 
-            // Если изменилось количество мест — синхронизируем Raffle, уменьшаем лишние билеты или добавляем недостающие
-            if (isset($validated['total_slots'])) {
+            if (isset($validated['total_slots']) && $activeRaffle) {
                 $newTotal = (int) $validated['total_slots'];
-                $raffleId = $settings->current_raffle_id;
-                if (!$raffleId || (int) $raffleId < 1) {
-                    $raffle = Raffle::getCurrentForBot($bot->id);
-                    $raffleId = $raffle?->id;
-                }
-                $raffleId = ($raffleId && (int) $raffleId > 0) ? (int) $raffleId : null;
-                $currentCount = Ticket::where('telegram_bot_id', $bot->id)
-                    ->when($raffleId !== null, fn($q) => $q->where('raffle_id', $raffleId), fn($q) => $q->whereNull('raffle_id'))
-                    ->count();
+                $raffleId = $activeRaffle->id;
+                $currentCount = Ticket::where('telegram_bot_id', $bot->id)->where('raffle_id', $raffleId)->count();
                 if ($newTotal < $currentCount) {
                     Ticket::reduceToTotal($bot->id, $newTotal, $raffleId);
                 }
                 Ticket::initializeForBot($bot->id, $newTotal, $raffleId);
-                // Бот показывает «Доступно мест» из Raffle.total_slots - tickets_issued, поэтому обновляем розыгрыш
-                if ($raffleId !== null) {
-                    Raffle::where('id', $raffleId)->update(['total_slots' => $newTotal]);
-                }
+            }
+
+            $settingsResponse = $settings->fresh()->toArray();
+            if ($activeRaffle) {
+                $activeRaffle->refresh();
+                $settingsResponse['total_slots'] = $activeRaffle->total_slots;
+                $settingsResponse['slot_price'] = $activeRaffle->slot_price;
+                $settingsResponse['slots_mode'] = $activeRaffle->slots_mode ?? $settingsResponse['slots_mode'];
+                $settingsResponse['raffle_info'] = $activeRaffle->raffle_info ?? $settingsResponse['raffle_info'] ?? '';
+                $settingsResponse['prize_description'] = $activeRaffle->prize_description ?? $settingsResponse['prize_description'] ?? '';
             }
 
             return response()->json([
                 'message' => 'Настройки сохранены',
-                'settings' => $settings->fresh(),
-                'tickets_stats' => Ticket::getStats($bot->id),
+                'settings' => $settingsResponse,
+                'current_raffle' => $activeRaffle ? [
+                    'id' => $activeRaffle->id,
+                    'name' => $activeRaffle->name,
+                    'total_slots' => $activeRaffle->total_slots,
+                    'slot_price' => $activeRaffle->slot_price,
+                ] : null,
+                'tickets_stats' => Ticket::getStats($bot->id, $activeRaffle?->id),
             ]);
         } catch (\Illuminate\Validation\ValidationException $e) {
             throw $e;
@@ -178,12 +222,14 @@ class RaffleSettingsController extends Controller
             ->firstOrFail();
 
         $settings = BotSettings::getOrCreate($bot->id);
-        
-        Ticket::initializeForBot($bot->id, $settings->total_slots);
+        $activeRaffle = Raffle::getCurrentForBot($bot->id) ?? Raffle::getOrCreateForBot($bot->id);
+        $totalSlots = $activeRaffle->total_slots ?? $settings->total_slots ?? 500;
+
+        Ticket::initializeForBot($bot->id, $totalSlots, $activeRaffle->id);
 
         return response()->json([
             'message' => 'Номерки инициализированы',
-            'tickets_stats' => Ticket::getStats($bot->id),
+            'tickets_stats' => Ticket::getStats($bot->id, $activeRaffle->id),
         ]);
     }
 }

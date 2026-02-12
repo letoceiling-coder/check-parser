@@ -271,12 +271,15 @@ class Check extends Model
     public function calculateTicketsCount(): int
     {
         $settings = BotSettings::where('telegram_bot_id', $this->telegram_bot_id)->first();
-        if (!$settings || $settings->slot_price <= 0) {
+        if (!$settings) {
             return 0;
         }
-        
+        $price = $settings->getEffectiveSlotPrice();
+        if ($price <= 0) {
+            return 0;
+        }
         $amount = $this->final_amount ?? 0;
-        return (int) floor($amount / $settings->slot_price);
+        return (int) floor($amount / $price);
     }
 
     /**

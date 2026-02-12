@@ -23,6 +23,8 @@ class Raffle extends Model
         'total_slots',
         'slot_price',
         'slots_mode',
+        'raffle_info',
+        'prize_description',
         'winner_ticket_id',
         'winner_bot_user_id',
         'winner_ticket_number',

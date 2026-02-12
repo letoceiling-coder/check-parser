@@ -137,6 +137,38 @@ class BotSettings extends Model
         return $this->belongsTo(Raffle::class, 'current_raffle_id');
     }
 
+    /**
+     * Получить активный розыгрыш для бота (синхронизирует current_raffle_id с фактическим активным).
+     */
+    public function getActiveRaffle(): ?Raffle
+    {
+        $raffle = $this->current_raffle_id
+            ? Raffle::find($this->current_raffle_id)
+            : null;
+        if (!$raffle || $raffle->status !== Raffle::STATUS_ACTIVE) {
+            $raffle = Raffle::getCurrentForBot($this->telegram_bot_id);
+            if ($raffle) {
+                $this->current_raffle_id = $raffle->id;
+                $this->save();
+            }
+        }
+        return $raffle;
+    }
+
+    /** Стоимость одного номерка активного розыгрыша (для бота). */
+    public function getEffectiveSlotPrice(): float
+    {
+        $r = $this->getActiveRaffle();
+        return $r ? (float) $r->slot_price : (float) ($this->slot_price ?? 10000);
+    }
+
+    /** Всего слотов активного розыгрыша (для бота). */
+    public function getEffectiveTotalSlots(): int
+    {
+        $r = $this->getActiveRaffle();
+        return $r ? (int) $r->total_slots : (int) ($this->total_slots ?? 500);
+    }
+
     // ==========================================
     // Методы для получения сообщений
     // ==========================================
@@ -181,7 +213,7 @@ class BotSettings extends Model
     public function getShowQrMessage(): string
     {
         return $this->getMessage('show_qr', [
-            'price' => number_format($this->slot_price, 0, '', ' '),
+            'price' => number_format($this->getEffectiveSlotPrice(), 0, '', ' '),
             'payment_description' => $this->payment_description,
         ]);
     }
@@ -241,10 +273,11 @@ class BotSettings extends Model
      */
     public function calculateTicketsCount(float $amount): int
     {
-        if ($this->slot_price <= 0) {
+        $price = $this->getEffectiveSlotPrice();
+        if ($price <= 0) {
             return 0;
         }
-        return (int) floor($amount / $this->slot_price);
+        return (int) floor($amount / $price);
     }
 
     /**
