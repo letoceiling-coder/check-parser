@@ -176,19 +176,19 @@ class Raffle extends Model
             ->get()
             ->groupBy(function (Ticket $t) use ($orderIdsByUser) {
                 if ($t->bot_user_id) {
-                    return $t->bot_user_id;
+                    return (int) $t->bot_user_id;
                 }
                 foreach ($orderIdsByUser as $uid => $oids) {
                     $oids = is_array($oids) ? $oids : [$oids];
                     if (in_array((int) $t->order_id, array_map('intval', $oids), true)) {
-                        return $uid;
+                        return (int) $uid;
                     }
                 }
                 return 0;
             });
 
         foreach ($users as $user) {
-            $tickets = $ticketsByUser->get($user->id, collect());
+            $tickets = $ticketsByUser->get((int) $user->id, collect());
             $user->setRelation('tickets', $tickets);
         }
 
