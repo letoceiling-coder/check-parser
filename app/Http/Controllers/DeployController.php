@@ -44,8 +44,8 @@ class DeployController extends Controller
             $token = $request->input('token') ?? $request->query('token');
         }
         
-        // Read token directly from .env (bypass config cache)
-        $expectedToken = env('DEPLOY_TOKEN');
+        // config('deploy.token') — подхватывается из кеша; env() при config:cache не читается
+        $expectedToken = config('deploy.token') ?: env('DEPLOY_TOKEN');
         
         // Debug logging
         Log::info('Deploy attempt', [
