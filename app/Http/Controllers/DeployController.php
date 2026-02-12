@@ -111,7 +111,7 @@ class DeployController extends Controller
             
             $log[] = 'Code updated successfully';
 
-                   // Step 2: Ensure public/.htaccess and public/index.php exist
+                   // Step 2: Ensure public/.htaccess and public/index.php exist (skip on permission error — e.g. nginx doesn't need .htaccess)
                    $publicHtaccess = public_path('.htaccess');
                    if (!file_exists($publicHtaccess)) {
                        $log[] = 'Creating public/.htaccess...';
@@ -147,8 +147,11 @@ class DeployController extends Controller
     RewriteRule ^ index.php [L]
 </IfModule>
 EOF;
-                       file_put_contents($publicHtaccess, $htaccessContent);
-                       $log[] = 'public/.htaccess created';
+                       if (@file_put_contents($publicHtaccess, $htaccessContent) !== false) {
+                           $log[] = 'public/.htaccess created';
+                       } else {
+                           $log[] = 'public/.htaccess skip (permission denied or nginx)';
+                       }
                    }
                    
                    $publicIndex = public_path('index.php');
@@ -172,8 +175,11 @@ $app = require_once __DIR__.'/../bootstrap/app.php';
 
 $app->handleRequest(Request::capture());
 EOF;
-                       file_put_contents($publicIndex, $indexContent);
-                       $log[] = 'public/index.php created';
+                       if (@file_put_contents($publicIndex, $indexContent) !== false) {
+                           $log[] = 'public/index.php created';
+                       } else {
+                           $errors[] = 'Could not create public/index.php (permission denied). Run scripts/setup-server-for-deploy.sh as root on server.';
+                       }
                    }
 
                    // Step 3: Ensure composer is installed in bin/composer and use it
