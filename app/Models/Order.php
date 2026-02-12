@@ -535,14 +535,7 @@ class Order extends Model
                     throw new \Exception('Активный розыгрыш не найден');
                 }
                 
-                // Проверяем свободные места
-                $availableSlots = $raffle->total_slots - $raffle->tickets_issued;
-                
-                if ($availableSlots < $quantity) {
-                    throw new \Exception("Недостаточно свободных мест. Осталось: {$availableSlots}");
-                }
-                
-                // Резервируем билеты
+                // Свободные билеты: без владельца и без заказа (считаем по факту, не по tickets_issued)
                 $tickets = Ticket::where('raffle_id', $raffleId)
                     ->whereNull('bot_user_id')
                     ->whereNull('order_id')
@@ -552,7 +545,11 @@ class Order extends Model
                     ->get();
                 
                 if ($tickets->count() < $quantity) {
-                    throw new \Exception("Не удалось зарезервировать билеты");
+                    $available = Ticket::where('raffle_id', $raffleId)
+                        ->whereNull('bot_user_id')
+                        ->whereNull('order_id')
+                        ->count();
+                    throw new \Exception("Недостаточно свободных мест. Осталось: {$available}");
                 }
                 
                 // Создаем заказ

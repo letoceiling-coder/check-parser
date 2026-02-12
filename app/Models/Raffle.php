@@ -143,7 +143,12 @@ class Raffle extends Model
             $query->where('raffle_id', $this->id);
         })->count();
 
-        $this->tickets_issued = $this->tickets()->whereNotNull('bot_user_id')->count();
+        // Учитываем и проданные (bot_user_id), и забронированные (order_id) билеты
+        $this->tickets_issued = $this->tickets()
+            ->where(function ($q) {
+                $q->whereNotNull('bot_user_id')->orWhereNotNull('order_id');
+            })
+            ->count();
         
         $this->total_revenue = $this->checks()
             ->where('review_status', 'approved')
