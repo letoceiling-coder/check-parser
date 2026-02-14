@@ -107,14 +107,15 @@ class ClearExpiredOrdersCommand extends Command
     }
 
     /**
-     * Освободить «зависшие» билеты: заказ EXPIRED/REJECTED или RESERVED с истёкшим reserved_until.
+     * Освободить «зависшие» билеты: заказ EXPIRED/REJECTED, просроченная RESERVED или SOLD с билетами без bot_user_id.
      * Запускается при каждом вызове команды, чтобы не накапливались несовпадения всего/свободно.
      */
     private function releaseOrphanedTickets(): void
     {
         $updated = Ticket::whereNotNull('order_id')
+            ->whereNull('bot_user_id')
             ->whereHas('order', function ($q) {
-                $q->whereIn('status', [Order::STATUS_EXPIRED, Order::STATUS_REJECTED])
+                $q->whereIn('status', [Order::STATUS_EXPIRED, Order::STATUS_REJECTED, Order::STATUS_SOLD])
                     ->orWhere(function ($q2) {
                         $q2->where('status', Order::STATUS_RESERVED)
                             ->where('reserved_until', '<', now());

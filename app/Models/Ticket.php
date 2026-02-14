@@ -292,12 +292,12 @@ class Ticket extends Model
             ->whereNotNull('order_id')
             ->whereHas('order', fn ($q) => $q->where('status', Order::STATUS_REVIEW))
             ->count();
-        // Свободно: нет владельца и нет активной брони (order_id null или заказ уже expired/rejected)
+        // Свободно: нет владельца и нет активной брони (order_id null или заказ expired/rejected/sold без выдачи)
         $available = (clone $base)
             ->whereNull('bot_user_id')
             ->where(function ($q) {
                 $q->whereNull('order_id')
-                    ->orWhereHas('order', fn ($q2) => $q2->whereIn('status', [Order::STATUS_EXPIRED, Order::STATUS_REJECTED]));
+                    ->orWhereHas('order', fn ($q2) => $q2->whereIn('status', [Order::STATUS_EXPIRED, Order::STATUS_REJECTED, Order::STATUS_SOLD]));
             })
             ->count();
 
