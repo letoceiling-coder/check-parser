@@ -278,10 +278,17 @@ class Ticket extends Model
         $issued = self::getIssuedCount($telegramBotId, $raffleId);
         $available = $total - $issued;
 
+        $reserved = self::where('telegram_bot_id', $telegramBotId)
+            ->when($raffleId !== null, fn ($q) => $q->where('raffle_id', $raffleId))
+            ->whereNotNull('order_id')
+            ->whereHas('order', fn ($q) => $q->where('status', Order::STATUS_RESERVED))
+            ->count();
+
         return [
             'total' => $total,
             'issued' => $issued,
             'available' => $available,
+            'reserved' => $reserved,
             'percentage_issued' => $total > 0 ? round(($issued / $total) * 100, 1) : 0,
         ];
     }
