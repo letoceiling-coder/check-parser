@@ -98,7 +98,8 @@ class DeployCommand extends Command
     {
         $this->info('Running update on server via SSH (' . $sshHost . ')...');
         $sshPath = rtrim(str_replace('\\', '/', $sshPath), '/');
-        $remoteCmd = "cd " . $sshPath . " && git pull origin main && bash update-on-server.sh";
+        // fetch + reset --hard чтобы не падать на локальных изменениях (сборка фронта и т.д.)
+        $remoteCmd = "cd " . $sshPath . " && git fetch origin main && git reset --hard origin/main && git clean -fd && bash update-on-server.sh";
         $fullCmd = "ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 -o ServerAliveInterval=15 " . $sshHost . " " . escapeshellarg($remoteCmd);
         $result = Process::timeout(600)->run($fullCmd, function (string $type, string $output): void {
             $this->getOutput()->write($output);
