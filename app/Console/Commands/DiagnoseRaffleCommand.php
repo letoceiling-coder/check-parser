@@ -57,9 +57,19 @@ class DiagnoseRaffleCommand extends Command
         $this->info("=== Билеты в БД ===");
         $this->line("Всего создано: {$totalTickets}");
         $this->line("Свободных (NULL/NULL): {$freeTickets}");
-        $this->line("Забронировано (order_id/NULL user): {$reservedTickets}");
+        $this->line("С order_id (бронь/проверка/зависшие): {$reservedTickets}");
         $this->line("Продано (user_id SET): {$soldTickets}");
-        
+        // Разбивка билетов с order_id по статусу заказа (чтобы понять «498 свободно» при 2 с order_id)
+        if ($reservedTickets > 0) {
+            $byStatus = [
+                'RESERVED' => Ticket::where('raffle_id', $raffle->id)->whereNotNull('order_id')->whereHas('order', fn ($q) => $q->where('status', Order::STATUS_RESERVED))->count(),
+                'REVIEW' => Ticket::where('raffle_id', $raffle->id)->whereNotNull('order_id')->whereHas('order', fn ($q) => $q->where('status', Order::STATUS_REVIEW))->count(),
+                'EXPIRED/REJECTED' => Ticket::where('raffle_id', $raffle->id)->whereNotNull('order_id')->whereHas('order', fn ($q) => $q->whereIn('status', [Order::STATUS_EXPIRED, Order::STATUS_REJECTED]))->count(),
+            ];
+            $this->line("  → по заказам: RESERVED={$byStatus['RESERVED']}, REVIEW={$byStatus['REVIEW']}, EXPIRED/REJECTED={$byStatus['EXPIRED/REJECTED']}");
+        }
+        $this->newLine();
+
         // Реальные данные для сравнения
         // Учитываем только реально выданные билеты (с bot_user_id)
         // Билеты с order_id но без bot_user_id - это только бронь, они не считаются выданными
@@ -111,13 +121,19 @@ class DiagnoseRaffleCommand extends Command
             $problems[] = "Найдено {$expiredOrders} просроченных броней (нужно очистить)";
         }
 
-        // Билеты, привязанные к заказам EXPIRED/REJECTED — «зависшие», не попадают в выдано/бронь/проверка/свободно
+        // Билеты «зависшие»: order EXPIRED/REJECTED или RESERVED с истёкшим reserved_until — не попадают в бронь/свободно
         $orphanTickets = Ticket::where('raffle_id', $raffle->id)
             ->whereNotNull('order_id')
-            ->whereHas('order', fn ($q) => $q->whereIn('status', [Order::STATUS_EXPIRED, Order::STATUS_REJECTED]))
+            ->whereHas('order', function ($q) {
+                $q->whereIn('status', [Order::STATUS_EXPIRED, Order::STATUS_REJECTED])
+                    ->orWhere(function ($q2) {
+                        $q2->where('status', Order::STATUS_RESERVED)
+                            ->where('reserved_until', '<', now());
+                    });
+            })
             ->count();
         if ($orphanTickets > 0) {
-            $problems[] = "{$orphanTickets} билетов привязаны к заказам EXPIRED/REJECTED (расхождение «Всего 500 / Свободно 498»). Исправить: php artisan raffle:diagnose --active --fix";
+            $problems[] = "{$orphanTickets} билетов привязаны к неактивным заказам (EXPIRED/REJECTED или просроченная бронь). Исправить: php artisan raffle:diagnose {$raffle->id} --fix";
         }
         
         // Проверяем расхождения в статистике
@@ -178,17 +194,20 @@ class DiagnoseRaffleCommand extends Command
             $this->info("✅ Просроченные брони очищены");
         }
         
-        // 2. Освобождение билетов, всё ещё привязанных к заказам EXPIRED/REJECTED («зависшие»)
-        $orphanTickets = Ticket::where('raffle_id', $raffle->id)
+        // 2. Освобождение «зависших» билетов: заказ EXPIRED/REJECTED или RESERVED с истёкшим reserved_until
+        $orphanQuery = Ticket::where('raffle_id', $raffle->id)
             ->whereNotNull('order_id')
-            ->whereHas('order', fn ($q) => $q->whereIn('status', [Order::STATUS_EXPIRED, Order::STATUS_REJECTED]))
-            ->count();
+            ->whereHas('order', function ($q) {
+                $q->whereIn('status', [Order::STATUS_EXPIRED, Order::STATUS_REJECTED])
+                    ->orWhere(function ($q2) {
+                        $q2->where('status', Order::STATUS_RESERVED)
+                            ->where('reserved_until', '<', now());
+                    });
+            });
+        $orphanTickets = (clone $orphanQuery)->count();
         if ($orphanTickets > 0) {
-            $this->line("Освобождение {$orphanTickets} билетов от заказов EXPIRED/REJECTED...");
-            Ticket::where('raffle_id', $raffle->id)
-                ->whereNotNull('order_id')
-                ->whereHas('order', fn ($q) => $q->whereIn('status', [Order::STATUS_EXPIRED, Order::STATUS_REJECTED]))
-                ->update(['order_id' => null, 'bot_user_id' => null, 'issued_at' => null]);
+            $this->line("Освобождение {$orphanTickets} билетов от неактивных заказов...");
+            $orphanQuery->update(['order_id' => null, 'bot_user_id' => null, 'issued_at' => null]);
             $this->info("✅ Билеты освобождены");
         }
 

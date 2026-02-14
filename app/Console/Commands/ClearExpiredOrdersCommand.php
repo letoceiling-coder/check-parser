@@ -45,6 +45,7 @@ class ClearExpiredOrdersCommand extends Command
 
         if ($expiredOrders->isEmpty()) {
             $this->info('No expired orders found.');
+            $this->releaseOrphanedTickets();
             return 0;
         }
 
@@ -98,10 +99,35 @@ class ClearExpiredOrdersCommand extends Command
             }
         }
 
+        // Профилактика: освободить билеты, всё ещё привязанные к EXPIRED/REJECTED (ручное изменение в БД, старый код)
+        $this->releaseOrphanedTickets();
+
         $this->info('Done.');
         return 0;
     }
-    
+
+    /**
+     * Освободить «зависшие» билеты: заказ EXPIRED/REJECTED или RESERVED с истёкшим reserved_until.
+     * Запускается при каждом вызове команды, чтобы не накапливались несовпадения всего/свободно.
+     */
+    private function releaseOrphanedTickets(): void
+    {
+        $updated = Ticket::whereNotNull('order_id')
+            ->whereHas('order', function ($q) {
+                $q->whereIn('status', [Order::STATUS_EXPIRED, Order::STATUS_REJECTED])
+                    ->orWhere(function ($q2) {
+                        $q2->where('status', Order::STATUS_RESERVED)
+                            ->where('reserved_until', '<', now());
+                    });
+            })
+            ->update(['order_id' => null, 'bot_user_id' => null, 'issued_at' => null]);
+
+        if ($updated > 0) {
+            Log::info("Released orphaned tickets", ['count' => $updated]);
+            $this->info("Released {$updated} orphaned ticket(s).");
+        }
+    }
+
     /**
      * Уведомить пользователя об истечении брони
      */
