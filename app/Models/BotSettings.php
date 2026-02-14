@@ -230,9 +230,9 @@ class BotSettings extends Model
     // ==========================================
 
     /**
-     * Получить количество доступных для брони мест по активному розыгрышу.
-     * Учитываются только билеты без владельца и без активной брони (order_id),
-     * чтобы число совпадало с реальной возможностью забронировать.
+     * Получить количество доступных для брони мест только по активному розыгрышу.
+     * Единственный источник активного розыгрыша — ActiveRaffleResolver (getActiveRaffle).
+     * Учитываются только билеты без владельца и без активной брони (order_id).
      */
     public function getAvailableSlotsCount(): int
     {
@@ -242,6 +242,7 @@ class BotSettings extends Model
         }
         $raffle->refresh();
         return (int) Ticket::where('raffle_id', $raffle->id)
+            ->where('telegram_bot_id', $this->telegram_bot_id)
             ->whereNull('bot_user_id')
             ->whereNull('order_id')
             ->count();
