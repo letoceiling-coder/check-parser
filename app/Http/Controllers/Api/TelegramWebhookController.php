@@ -314,6 +314,11 @@ class TelegramWebhookController extends Controller
             return;
         }
 
+        // Если у пользователя уже есть активная бронь (RESERVED или REVIEW) — уведомляем, показываем QR/инструкции, кнопку «Отменить бронь»
+        if ($this->showExistingReservationIfAny($bot, $botUser, $chatId, $settings, $raffle->id)) {
+            return;
+        }
+
         // Проверка свободных мест и номерков пользователя только по активному розыгрышу
         $availableSlots = $settings->getAvailableSlotsCount();
         $userTickets = $botUser->getTicketNumbers($raffle->id);
@@ -3772,8 +3777,12 @@ PYTHON;
                 return;
             
             case 'buy_tickets':
-                // Купить билеты (новый или вернувшийся пользователь)
+                // Купить билеты: сначала проверяем, нет ли уже активной брони
                 $this->deleteMessage($bot, $chatId, $messageId);
+                $raffle = Raffle::resolveActiveForBot($bot->id);
+                if ($raffle && $this->showExistingReservationIfAny($bot, $botUser, $chatId, $botSettings, $raffle->id)) {
+                    return;
+                }
                 $this->handleAskQuantity($bot, $botUser, $chatId, $botSettings);
                 return;
             
@@ -4866,6 +4875,51 @@ PYTHON;
             'quantity' => $quantity,
             'amount' => $amount
         ]);
+    }
+
+    /**
+     * Если у пользователя есть активная бронь (RESERVED или REVIEW) по активному розыгрышу —
+     * уведомить, показать QR/инструкции или «чек на проверке», кнопку «Отменить бронь». Возвращает true, если бронь показана.
+     */
+    private function showExistingReservationIfAny(
+        TelegramBot $bot,
+        BotUser $botUser,
+        int $chatId,
+        BotSettings $settings,
+        int $raffleId
+    ): bool {
+        $order = \App\Models\Order::where('bot_user_id', $botUser->id)
+            ->where('raffle_id', $raffleId)
+            ->whereIn('status', [\App\Models\Order::STATUS_RESERVED, \App\Models\Order::STATUS_REVIEW])
+            ->first();
+
+        if (!$order) {
+            return false;
+        }
+
+        $botUser->fsm_data = array_merge($botUser->fsm_data ?? [], ['current_order_id' => $order->id]);
+
+        if ($order->isReview()) {
+            // Чек уже на проверке — напоминаем и даём отменить заявку
+            $botUser->fsm_state = BotUser::STATE_ORDER_REVIEW;
+            $botUser->save();
+            $msg = "📋 У вас уже есть заявка на проверке.\n\n📦 Количество: {$order->quantity} шт.\n💰 К оплате: " . number_format($order->amount, 0, '', ' ') . " руб.\n\nДождитесь результата проверки или отмените заявку.";
+            $keyboard = [
+                'inline_keyboard' => [
+                    [['text' => '❌ Отменить заказ', 'callback_data' => 'cancel_order:' . $order->id]],
+                ]
+            ];
+            $this->sendMessageWithKeyboard($bot, $chatId, $msg, $keyboard);
+            return true;
+        }
+
+        // RESERVED — напоминаем о брони, снова показываем QR и инструкции
+        $botUser->fsm_state = BotUser::STATE_WAIT_CHECK_FOR_ORDER;
+        $botUser->save();
+        $msg = "✅ У вас уже есть бронь мест!\n\n📦 Количество: {$order->quantity} шт.\n💰 К оплате: " . number_format($order->amount, 0, '', ' ') . " руб.\n\n👇 Реквизиты для оплаты ниже. Отправьте чек в PDF или отмените бронь.";
+        $this->sendMessage($bot, $chatId, $msg);
+        $this->sendOrderInstructions($bot, $botUser, $chatId, $settings, $order);
+        return true;
     }
 
     /**
