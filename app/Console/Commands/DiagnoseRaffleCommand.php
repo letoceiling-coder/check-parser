@@ -102,13 +102,22 @@ class DiagnoseRaffleCommand extends Command
         }
         
         // Проверка просроченных броней
-        $expiredOrders = Order::where('raffle_id', $raffleId)
+        $expiredOrders = Order::where('raffle_id', $raffle->id)
             ->where('status', Order::STATUS_RESERVED)
             ->where('reserved_until', '<', now())
             ->count();
-        
+
         if ($expiredOrders > 0) {
             $problems[] = "Найдено {$expiredOrders} просроченных броней (нужно очистить)";
+        }
+
+        // Билеты, привязанные к заказам EXPIRED/REJECTED — «зависшие», не попадают в выдано/бронь/проверка/свободно
+        $orphanTickets = Ticket::where('raffle_id', $raffle->id)
+            ->whereNotNull('order_id')
+            ->whereHas('order', fn ($q) => $q->whereIn('status', [Order::STATUS_EXPIRED, Order::STATUS_REJECTED]))
+            ->count();
+        if ($orphanTickets > 0) {
+            $problems[] = "{$orphanTickets} билетов привязаны к заказам EXPIRED/REJECTED (расхождение «Всего 500 / Свободно 498»). Исправить: php artisan raffle:diagnose --active --fix";
         }
         
         // Проверяем расхождения в статистике
@@ -169,7 +178,21 @@ class DiagnoseRaffleCommand extends Command
             $this->info("✅ Просроченные брони очищены");
         }
         
-        // 2. Проверка и пересоздание билетов если нужно
+        // 2. Освобождение билетов, всё ещё привязанных к заказам EXPIRED/REJECTED («зависшие»)
+        $orphanTickets = Ticket::where('raffle_id', $raffle->id)
+            ->whereNotNull('order_id')
+            ->whereHas('order', fn ($q) => $q->whereIn('status', [Order::STATUS_EXPIRED, Order::STATUS_REJECTED]))
+            ->count();
+        if ($orphanTickets > 0) {
+            $this->line("Освобождение {$orphanTickets} билетов от заказов EXPIRED/REJECTED...");
+            Ticket::where('raffle_id', $raffle->id)
+                ->whereNotNull('order_id')
+                ->whereHas('order', fn ($q) => $q->whereIn('status', [Order::STATUS_EXPIRED, Order::STATUS_REJECTED]))
+                ->update(['order_id' => null, 'bot_user_id' => null, 'issued_at' => null]);
+            $this->info("✅ Билеты освобождены");
+        }
+
+        // 3. Проверка и пересоздание билетов если нужно
         $totalTickets = $raffle->tickets()->count();
         if ($totalTickets < $raffle->total_slots) {
             $missing = $raffle->total_slots - $totalTickets;
@@ -199,7 +222,7 @@ class DiagnoseRaffleCommand extends Command
             $this->info("✅ Создано {$missing} билетов");
         }
         
-        // 3. Пересчёт всей статистики (всегда обновляем при --fix)
+        // 4. Пересчёт всей статистики (всегда обновляем при --fix)
         $this->line("Пересчёт статистики розыгрыша...");
         $raffle->updateStatistics();
         $raffle->refresh();

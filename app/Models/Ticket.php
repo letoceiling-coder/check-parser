@@ -274,7 +274,8 @@ class Ticket extends Model
      * - issued: выдано (bot_user_id не null)
      * - reserved: в брони (order_id + заказ в статусе reserved)
      * - review: на проверке (order_id + заказ в статусе review)
-     * - available: свободно для брони (bot_user_id и order_id null)
+     * - available: свободно для брони (bot_user_id null и нет активного заказа:
+     *   order_id null ИЛИ заказ в статусе expired/rejected — «зависшие» билеты тоже считаем свободными)
      */
     public static function getStats(int $telegramBotId, ?int $raffleId = null): array
     {
@@ -283,10 +284,6 @@ class Ticket extends Model
 
         $total = (clone $base)->count();
         $issued = (clone $base)->whereNotNull('bot_user_id')->count();
-        $available = (clone $base)
-            ->whereNull('bot_user_id')
-            ->whereNull('order_id')
-            ->count();
         $reserved = (clone $base)
             ->whereNotNull('order_id')
             ->whereHas('order', fn ($q) => $q->where('status', Order::STATUS_RESERVED))
@@ -294,6 +291,14 @@ class Ticket extends Model
         $review = (clone $base)
             ->whereNotNull('order_id')
             ->whereHas('order', fn ($q) => $q->where('status', Order::STATUS_REVIEW))
+            ->count();
+        // Свободно: нет владельца и нет активной брони (order_id null или заказ уже expired/rejected)
+        $available = (clone $base)
+            ->whereNull('bot_user_id')
+            ->where(function ($q) {
+                $q->whereNull('order_id')
+                    ->orWhereHas('order', fn ($q2) => $q2->whereIn('status', [Order::STATUS_EXPIRED, Order::STATUS_REJECTED]));
+            })
             ->count();
 
         return [
