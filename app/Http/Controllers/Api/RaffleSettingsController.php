@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\BotSettings;
+use App\Models\Order;
 use App\Models\Raffle;
 use App\Models\TelegramBot;
 use App\Models\Ticket;
@@ -33,6 +34,47 @@ class RaffleSettingsController extends Controller
 
             $ticketsStats = Ticket::getStats($bot->id, $activeRaffle?->id);
 
+            // Списки для карточек «Выдано» и «Брони»
+            $issuedUsers = [];
+            $reservations = [];
+            if ($activeRaffle) {
+                $issuedTickets = Ticket::where('raffle_id', $activeRaffle->id)
+                    ->whereNotNull('bot_user_id')
+                    ->with('botUser')
+                    ->orderBy('bot_user_id')
+                    ->get();
+                $byUser = $issuedTickets->groupBy('bot_user_id');
+                foreach ($byUser as $botUserId => $tickets) {
+                    $user = $tickets->first()->botUser;
+                    $issuedUsers[] = [
+                        'bot_user_id' => (int) $botUserId,
+                        'user_name' => $user ? trim(($user->first_name ?? '') . ' ' . ($user->last_name ?? '')) : '—',
+                        'username' => $user?->username ?? null,
+                        'tickets_count' => $tickets->count(),
+                        'ticket_numbers' => $tickets->pluck('number')->sort()->values()->all(),
+                    ];
+                }
+                $reservationOrders = Order::where('raffle_id', $activeRaffle->id)
+                    ->where('status', Order::STATUS_RESERVED)
+                    ->with('botUser')
+                    ->orderBy('reserved_until')
+                    ->get();
+                foreach ($reservationOrders as $order) {
+                    $user = $order->botUser;
+                    $reservedUntil = $order->reserved_until ? $order->reserved_until->timezone('Europe/Moscow') : null;
+                    $minutesLeft = $reservedUntil && $reservedUntil->isFuture() ? (int) $reservedUntil->diffInMinutes(now()) : 0;
+                    $reservations[] = [
+                        'order_id' => $order->id,
+                        'bot_user_id' => $order->bot_user_id,
+                        'user_name' => $user ? trim(($user->first_name ?? '') . ' ' . ($user->last_name ?? '')) : '—',
+                        'username' => $user?->username ?? null,
+                        'quantity' => $order->quantity,
+                        'reserved_until' => $reservedUntil ? $reservedUntil->toIso8601String() : null,
+                        'minutes_left' => $minutesLeft,
+                    ];
+                }
+            }
+
             $settingsArray = $settings->toArray();
             if ($activeRaffle) {
                 $settingsArray['total_slots'] = $activeRaffle->total_slots;
@@ -52,6 +94,8 @@ class RaffleSettingsController extends Controller
                     'slot_price' => $activeRaffle->slot_price,
                 ] : null,
                 'tickets_stats' => $ticketsStats,
+                'issued_users' => $issuedUsers,
+                'reservations' => $reservations,
                 'qr_image_url' => $settings->getQrImageUrl(),
                 'default_messages' => BotSettings::DEFAULTS,
             ]);

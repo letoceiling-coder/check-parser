@@ -8,6 +8,9 @@ function RaffleSettings({ bot }) {
   const [currentRaffle, setCurrentRaffle] = useState(null);
   const [activeRaffleMissing, setActiveRaffleMissing] = useState(false);
   const [ticketsStats, setTicketsStats] = useState(null);
+  const [issuedUsers, setIssuedUsers] = useState([]);
+  const [reservations, setReservations] = useState([]);
+  const [statsModal, setStatsModal] = useState(null); // 'issued' | 'reserved' | 'review' | null
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
@@ -50,6 +53,8 @@ function RaffleSettings({ bot }) {
         setCurrentRaffle(data.current_raffle || null);
         setActiveRaffleMissing(!!data.active_raffle_missing);
         setTicketsStats(data.tickets_stats);
+        setIssuedUsers(data.issued_users || []);
+        setReservations(data.reservations || []);
 
         // Заполняем форму
         setFormData({
@@ -242,25 +247,41 @@ function RaffleSettings({ bot }) {
         </div>
       )}
 
-      {/* Статистика номерков (только активный розыгрыш): total = Выдано + Брони + На проверке + Свободно */}
+      {/* Статистика номерков: Выдано / Брони / На проверке — кликабельны, открывают детали или ссылку */}
       {ticketsStats && (
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-4">
           <div className="bg-gradient-to-r from-purple-500 to-purple-600 p-4 rounded-lg text-white">
             <div className="text-2xl font-bold">{ticketsStats.total}</div>
             <div className="text-sm opacity-80">Всего номерков</div>
           </div>
-          <div className="bg-gradient-to-r from-green-500 to-green-600 p-4 rounded-lg text-white">
+          <button
+            type="button"
+            onClick={() => setStatsModal('issued')}
+            className="bg-gradient-to-r from-green-500 to-green-600 p-4 rounded-lg text-white text-left hover:opacity-90 transition-opacity cursor-pointer"
+          >
             <div className="text-2xl font-bold">{ticketsStats.issued ?? 0}</div>
             <div className="text-sm opacity-80">Выдано</div>
-          </div>
-          <div className="bg-gradient-to-r from-amber-500 to-amber-600 p-4 rounded-lg text-white">
+            <div className="text-xs opacity-70 mt-1">Нажмите для списка</div>
+          </button>
+          <button
+            type="button"
+            onClick={() => setStatsModal('reserved')}
+            className="bg-gradient-to-r from-amber-500 to-amber-600 p-4 rounded-lg text-white text-left hover:opacity-90 transition-opacity cursor-pointer"
+          >
             <div className="text-2xl font-bold">{ticketsStats.reserved ?? 0}</div>
             <div className="text-sm opacity-80">Брони</div>
-          </div>
-          <div className="bg-gradient-to-r from-cyan-500 to-cyan-600 p-4 rounded-lg text-white">
+            <div className="text-xs opacity-70 mt-1">Нажмите для списка</div>
+          </button>
+          <a
+            href={`${window.location.origin}/checks`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="bg-gradient-to-r from-cyan-500 to-cyan-600 p-4 rounded-lg text-white text-left hover:opacity-90 transition-opacity no-underline block"
+          >
             <div className="text-2xl font-bold">{ticketsStats.review ?? 0}</div>
             <div className="text-sm opacity-80">На проверке</div>
-          </div>
+            <div className="text-xs opacity-70 mt-1">Открыть чеки →</div>
+          </a>
           <div className="bg-gradient-to-r from-blue-500 to-blue-600 p-4 rounded-lg text-white">
             <div className="text-2xl font-bold">{ticketsStats.available ?? 0}</div>
             <div className="text-sm opacity-80">Свободно</div>
@@ -268,6 +289,57 @@ function RaffleSettings({ bot }) {
           <div className="bg-gradient-to-r from-orange-500 to-orange-600 p-4 rounded-lg text-white">
             <div className="text-2xl font-bold">{ticketsStats.percentage_issued ?? 0}%</div>
             <div className="text-sm opacity-80">Заполнено</div>
+          </div>
+        </div>
+      )}
+
+      {/* Модальное окно: Выдано (список пользователей) или Брони (кто, сколько времени осталось) */}
+      {statsModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4" onClick={() => setStatsModal(null)}>
+          <div className="bg-white rounded-xl shadow-xl max-w-lg w-full max-h-[80vh] overflow-hidden" onClick={e => e.stopPropagation()}>
+            <div className="p-4 border-b flex justify-between items-center">
+              <h3 className="text-lg font-semibold text-gray-800">
+                {statsModal === 'issued' && 'Выдано — список пользователей'}
+                {statsModal === 'reserved' && 'Брони — за кем бронь, время до истечения'}
+              </h3>
+              <button type="button" onClick={() => setStatsModal(null)} className="text-gray-500 hover:text-gray-700 text-2xl leading-none">&times;</button>
+            </div>
+            <div className="p-4 overflow-y-auto max-h-[60vh]">
+              {statsModal === 'issued' && (
+                issuedUsers.length === 0 ? (
+                  <p className="text-gray-500">Нет выданных номерков.</p>
+                ) : (
+                  <ul className="space-y-3">
+                    {issuedUsers.map((u, i) => (
+                      <li key={u.bot_user_id || i} className="border-b border-gray-100 pb-2 last:border-0">
+                        <div className="font-medium text-gray-800">{u.user_name || '—'}{u.username && <span className="text-gray-500 font-normal"> @{u.username}</span>}</div>
+                        <div className="text-sm text-gray-600">Номерков: {u.tickets_count}{u.ticket_numbers && u.ticket_numbers.length > 0 && ` (№ ${u.ticket_numbers.slice(0, 10).join(', ')}${u.ticket_numbers.length > 10 ? '…' : ''})`}</div>
+                      </li>
+                    ))}
+                  </ul>
+                )
+              )}
+              {statsModal === 'reserved' && (
+                reservations.length === 0 ? (
+                  <p className="text-gray-500">Нет активных броней.</p>
+                ) : (
+                  <ul className="space-y-3">
+                    {reservations.map((r) => (
+                      <li key={r.order_id} className="border-b border-gray-100 pb-2 last:border-0">
+                        <div className="font-medium text-gray-800">{r.user_name || '—'}{r.username && <span className="text-gray-500 font-normal"> @{r.username}</span>}</div>
+                        <div className="text-sm text-gray-600">Количество: {r.quantity} шт.</div>
+                        <div className="text-sm text-amber-700">
+                          Осталось: {r.minutes_left != null ? `${r.minutes_left} мин` : '—'}
+                          {r.reserved_until && (
+                            <span className="text-gray-500 ml-1">(до {new Date(r.reserved_until).toLocaleString('ru-RU', { hour: '2-digit', minute: '2-digit', day: '2-digit', month: '2-digit', year: 'numeric' })})</span>
+                          )}
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                )
+              )}
+            </div>
           </div>
         </div>
       )}
