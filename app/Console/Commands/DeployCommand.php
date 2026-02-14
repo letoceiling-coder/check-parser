@@ -99,8 +99,10 @@ class DeployCommand extends Command
         $this->info('Running update on server via SSH (' . $sshHost . ')...');
         $sshPath = rtrim(str_replace('\\', '/', $sshPath), '/');
         $remoteCmd = "cd " . $sshPath . " && git pull origin main && bash update-on-server.sh";
-        $fullCmd = "ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 " . $sshHost . " " . escapeshellarg($remoteCmd);
-        $result = Process::timeout(600)->run($fullCmd);
+        $fullCmd = "ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 -o ServerAliveInterval=15 " . $sshHost . " " . escapeshellarg($remoteCmd);
+        $result = Process::timeout(600)->run($fullCmd, function (string $type, string $output): void {
+            $this->getOutput()->write($output);
+        });
         if (!$result->successful()) {
             $this->error('SSH deploy failed.');
             $this->line($result->output());
@@ -108,7 +110,6 @@ class DeployCommand extends Command
             return Command::FAILURE;
         }
         $this->info('Deployment on server completed successfully.');
-        $this->line($result->output());
         return Command::SUCCESS;
     }
 

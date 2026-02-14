@@ -230,7 +230,9 @@ class BotSettings extends Model
     // ==========================================
 
     /**
-     * Получить количество свободных мест только по активному розыгрышу.
+     * Получить количество доступных для брони мест по активному розыгрышу.
+     * Учитываются только билеты без владельца и без активной брони (order_id),
+     * чтобы число совпадало с реальной возможностью забронировать.
      */
     public function getAvailableSlotsCount(): int
     {
@@ -239,12 +241,10 @@ class BotSettings extends Model
             return 0;
         }
         $raffle->refresh();
-        // Учитываем только реально выданные билеты (с bot_user_id)
-        // Билеты с order_id но без bot_user_id - это только бронь, они не считаются выданными
-        $issuedCount = Ticket::where('raffle_id', $raffle->id)
-            ->whereNotNull('bot_user_id')
+        return (int) Ticket::where('raffle_id', $raffle->id)
+            ->whereNull('bot_user_id')
+            ->whereNull('order_id')
             ->count();
-        return max(0, (int) $raffle->total_slots - $issuedCount);
     }
 
     /**
