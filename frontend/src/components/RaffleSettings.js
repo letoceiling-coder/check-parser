@@ -242,27 +242,31 @@ function RaffleSettings({ bot }) {
         </div>
       )}
 
-      {/* Статистика номерков */}
+      {/* Статистика номерков (только активный розыгрыш): total = Выдано + Брони + На проверке + Свободно */}
       {ticketsStats && (
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4">
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-4">
           <div className="bg-gradient-to-r from-purple-500 to-purple-600 p-4 rounded-lg text-white">
             <div className="text-2xl font-bold">{ticketsStats.total}</div>
             <div className="text-sm opacity-80">Всего номерков</div>
           </div>
           <div className="bg-gradient-to-r from-green-500 to-green-600 p-4 rounded-lg text-white">
-            <div className="text-2xl font-bold">{ticketsStats.issued}</div>
+            <div className="text-2xl font-bold">{ticketsStats.issued ?? 0}</div>
             <div className="text-sm opacity-80">Выдано</div>
           </div>
           <div className="bg-gradient-to-r from-amber-500 to-amber-600 p-4 rounded-lg text-white">
             <div className="text-2xl font-bold">{ticketsStats.reserved ?? 0}</div>
             <div className="text-sm opacity-80">Брони</div>
           </div>
+          <div className="bg-gradient-to-r from-cyan-500 to-cyan-600 p-4 rounded-lg text-white">
+            <div className="text-2xl font-bold">{ticketsStats.review ?? 0}</div>
+            <div className="text-sm opacity-80">На проверке</div>
+          </div>
           <div className="bg-gradient-to-r from-blue-500 to-blue-600 p-4 rounded-lg text-white">
-            <div className="text-2xl font-bold">{ticketsStats.available}</div>
+            <div className="text-2xl font-bold">{ticketsStats.available ?? 0}</div>
             <div className="text-sm opacity-80">Свободно</div>
           </div>
           <div className="bg-gradient-to-r from-orange-500 to-orange-600 p-4 rounded-lg text-white">
-            <div className="text-2xl font-bold">{ticketsStats.percentage_issued}%</div>
+            <div className="text-2xl font-bold">{ticketsStats.percentage_issued ?? 0}%</div>
             <div className="text-sm opacity-80">Заполнено</div>
           </div>
         </div>

@@ -237,15 +237,16 @@ class Ticket extends Model
     }
 
     /**
-     * Получить количество выданных номерков (опционально по розыгрышу)
+     * Получить количество выданных номерков (опционально по розыгрышу).
+     * Только активный розыгрыш: при вызове из getStats всегда передавать raffleId.
      */
     public static function getIssuedCount(int $telegramBotId, ?int $raffleId = null): int
     {
-        $q = self::where('telegram_bot_id', $telegramBotId)->whereNotNull('bot_user_id');
+        $query = self::where('telegram_bot_id', $telegramBotId)->whereNotNull('bot_user_id');
         if ($raffleId !== null) {
-            $q->where('raffle_id', $raffleId);
+            $query->where('raffle_id', $raffleId);
         }
-        return $q->count();
+        return $query->count();
     }
 
     /**
@@ -268,8 +269,12 @@ class Ticket extends Model
     }
 
     /**
-     * Получить статистику по номеркам (опционально по розыгрышу).
-     * available = реально свободно для брони (без владельца и без order_id), как в боте.
+     * Статистика по номеркам только по указанному розыгрышу (для активного — передавать raffleId).
+     * Инвариант: total = issued + reserved + review + available.
+     * - issued: выдано (bot_user_id не null)
+     * - reserved: в брони (order_id + заказ в статусе reserved)
+     * - review: на проверке (order_id + заказ в статусе review)
+     * - available: свободно для брони (bot_user_id и order_id null)
      */
     public static function getStats(int $telegramBotId, ?int $raffleId = null): array
     {
@@ -277,23 +282,26 @@ class Ticket extends Model
             ->when($raffleId !== null, fn ($q) => $q->where('raffle_id', $raffleId));
 
         $total = (clone $base)->count();
-        $issued = self::getIssuedCount($telegramBotId, $raffleId);
-
+        $issued = (clone $base)->whereNotNull('bot_user_id')->count();
         $available = (clone $base)
             ->whereNull('bot_user_id')
             ->whereNull('order_id')
             ->count();
-
         $reserved = (clone $base)
             ->whereNotNull('order_id')
             ->whereHas('order', fn ($q) => $q->where('status', Order::STATUS_RESERVED))
+            ->count();
+        $review = (clone $base)
+            ->whereNotNull('order_id')
+            ->whereHas('order', fn ($q) => $q->where('status', Order::STATUS_REVIEW))
             ->count();
 
         return [
             'total' => $total,
             'issued' => $issued,
-            'available' => $available,
             'reserved' => $reserved,
+            'review' => $review,
+            'available' => $available,
             'percentage_issued' => $total > 0 ? round(($issued / $total) * 100, 1) : 0,
         ];
     }
