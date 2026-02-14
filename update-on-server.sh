@@ -17,6 +17,7 @@ echo "=== 4. Фронтенд ==="
 if [ -d frontend ]; then
   cd frontend
   npm ci --legacy-peer-deps 2>/dev/null || npm install --legacy-peer-deps
+  export NODE_OPTIONS=--max-old-space-size=4096
   npm run build --legacy-peer-deps
   cd ..
 fi
