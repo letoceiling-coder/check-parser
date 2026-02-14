@@ -10,6 +10,7 @@ function RaffleSettings({ bot }) {
   const [ticketsStats, setTicketsStats] = useState(null);
   const [issuedUsers, setIssuedUsers] = useState([]);
   const [reservations, setReservations] = useState([]);
+  const [qrImageUrl, setQrImageUrl] = useState(null);
   const [statsModal, setStatsModal] = useState(null); // 'issued' | 'reserved' | 'review' | null
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -55,6 +56,7 @@ function RaffleSettings({ bot }) {
         setTicketsStats(data.tickets_stats);
         setIssuedUsers(data.issued_users || []);
         setReservations(data.reservations || []);
+        setQrImageUrl(data.qr_image_url || null);
 
         // Заполняем форму
         setFormData({
@@ -551,9 +553,9 @@ function RaffleSettings({ bot }) {
               <label className="block text-sm font-medium text-gray-700 mb-2">
                 Текущий QR-код
               </label>
-              {settings?.qr_image_path ? (
+              {qrImageUrl ? (
                 <img
-                  src={`${API_URL}/storage/${settings.qr_image_path}`}
+                  src={qrImageUrl}
                   alt="QR-код"
                   className="max-w-full h-48 object-contain border rounded-lg"
                 />

@@ -389,13 +389,14 @@ class RaffleController extends Controller
         try {
             DB::beginTransaction();
 
-            // Сбрасываем все номерки (отвязываем от пользователей)
+            // Сбрасываем все номерки (отвязываем от пользователей и от заказов/броней других розыгрышей)
             Ticket::where('telegram_bot_id', $bot->id)
                 ->update([
                     'bot_user_id' => null,
                     'check_id' => null,
                     'issued_at' => null,
                     'raffle_id' => null,
+                    'order_id' => null,
                 ]);
 
             // Создаём новый розыгрыш

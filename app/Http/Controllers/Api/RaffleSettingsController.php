@@ -10,8 +10,10 @@ use App\Models\TelegramBot;
 use App\Models\Ticket;
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
-use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Facades\URL;
+use Symfony\Component\HttpFoundation\Response;
 
 class RaffleSettingsController extends Controller
 {
@@ -96,7 +98,7 @@ class RaffleSettingsController extends Controller
                 'tickets_stats' => $ticketsStats,
                 'issued_users' => $issuedUsers,
                 'reservations' => $reservations,
-                'qr_image_url' => $settings->getQrImageUrl(),
+                'qr_image_url' => $this->getQrImageUrlForApi($bot->id, $settings),
                 'default_messages' => BotSettings::DEFAULTS,
             ]);
         } catch (\Throwable $e) {
@@ -251,7 +253,7 @@ class RaffleSettingsController extends Controller
 
         return response()->json([
             'message' => 'QR-код загружен',
-            'qr_image_url' => $settings->getQrImageUrl(),
+            'qr_image_url' => $this->getQrImageUrlForApi($id, $settings),
             'qr_image_path' => $settings->qr_image_path,
         ]);
     }
@@ -280,5 +282,42 @@ class RaffleSettingsController extends Controller
             'message' => 'Номерки инициализированы',
             'tickets_stats' => Ticket::getStats($bot->id, $activeRaffle->id),
         ]);
+    }
+
+    /**
+     * Подписанный URL для QR-кода (используется в show/uploadQr).
+     */
+    private function getQrImageUrlForApi(int $botId, BotSettings $settings): ?string
+    {
+        if (!$settings->qr_image_path) {
+            return null;
+        }
+        return URL::temporarySignedRoute(
+            'api.raffle-settings.qr-image',
+            now()->addMinutes(60),
+            ['id' => $botId]
+        );
+    }
+
+    /**
+     * Отдать файл QR-кода по подписанному URL (маршрут без auth:sanctum).
+     */
+    public function qrImage(Request $request, int $id): Response
+    {
+        $settings = BotSettings::where('telegram_bot_id', $id)->first();
+        if (!$settings || !$settings->qr_image_path) {
+            abort(404);
+        }
+        $path = $settings->getQrImageFullPath();
+        if (!$path || !is_file($path) || !is_readable($path)) {
+            abort(404);
+        }
+        $mime = match (strtolower(pathinfo($path, PATHINFO_EXTENSION))) {
+            'png' => 'image/png',
+            'gif' => 'image/gif',
+            'webp' => 'image/webp',
+            default => 'image/jpeg',
+        };
+        return response()->file($path, ['Content-Type' => $mime]);
     }
 }

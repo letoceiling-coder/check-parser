@@ -209,7 +209,7 @@ class Ticket extends Model
      */
     public static function prepareForNewRaffle(int $telegramBotId, int $newRaffleId, int $totalSlots): void
     {
-        // Обновляем существующие номерки - привязываем к новому розыгрышу и сбрасываем владельцев
+        // Обновляем существующие номерки — привязываем к новому розыгрышу, сбрасываем владельцев и брони (order_id), чтобы данные других розыгрышей не тянулись в новый
         self::where('telegram_bot_id', $telegramBotId)
             ->whereNull('raffle_id')
             ->orWhere(function ($query) use ($telegramBotId) {
@@ -220,6 +220,7 @@ class Ticket extends Model
                 'bot_user_id' => null,
                 'check_id' => null,
                 'issued_at' => null,
+                'order_id' => null,
             ]);
         
         // Инициализируем недостающие номерки
@@ -284,20 +285,22 @@ class Ticket extends Model
 
         $total = (clone $base)->count();
         $issued = (clone $base)->whereNotNull('bot_user_id')->count();
+        // Брони и «на проверке» — только заказы этого розыгрыша (order.raffle_id = raffleId)
         $reserved = (clone $base)
             ->whereNotNull('order_id')
-            ->whereHas('order', fn ($q) => $q->where('status', Order::STATUS_RESERVED))
+            ->whereHas('order', fn ($q) => $q->where('status', Order::STATUS_RESERVED)->when($raffleId !== null, fn ($q2) => $q2->where('raffle_id', $raffleId)))
             ->count();
         $review = (clone $base)
             ->whereNotNull('order_id')
-            ->whereHas('order', fn ($q) => $q->where('status', Order::STATUS_REVIEW))
+            ->whereHas('order', fn ($q) => $q->where('status', Order::STATUS_REVIEW)->when($raffleId !== null, fn ($q2) => $q2->where('raffle_id', $raffleId)))
             ->count();
         // Свободно: нет владельца и нет активной брони (order_id null или заказ expired/rejected/sold без выдачи)
         $available = (clone $base)
             ->whereNull('bot_user_id')
-            ->where(function ($q) {
+            ->where(function ($q) use ($raffleId) {
                 $q->whereNull('order_id')
-                    ->orWhereHas('order', fn ($q2) => $q2->whereIn('status', [Order::STATUS_EXPIRED, Order::STATUS_REJECTED, Order::STATUS_SOLD]));
+                    ->orWhereHas('order', fn ($q2) => $q2->whereIn('status', [Order::STATUS_EXPIRED, Order::STATUS_REJECTED, Order::STATUS_SOLD])
+                        ->when($raffleId !== null, fn ($q3) => $q3->where('raffle_id', $raffleId)));
             })
             ->count();
 

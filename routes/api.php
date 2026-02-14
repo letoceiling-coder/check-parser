@@ -18,6 +18,11 @@ Route::get('/checks/analyze/{id}', [\App\Http\Controllers\Api\CheckController::c
 // File route - отдельно, поддерживает token в query string для iframe
 Route::get('/checks/{id}/file', [\App\Http\Controllers\Api\CheckController::class, 'file']);
 
+// QR-код бота по подписанному URL (для <img src>; без auth, проверка подписи)
+Route::get('/bot/{id}/raffle-settings/qr-image', [\App\Http\Controllers\Api\RaffleSettingsController::class, 'qrImage'])
+    ->middleware('signed')
+    ->name('api.raffle-settings.qr-image');
+
 // Auth routes
 Route::post('/login', [AuthController::class, 'login']);
 Route::middleware('auth:sanctum')->group(function () {
