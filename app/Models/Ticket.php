@@ -268,18 +268,23 @@ class Ticket extends Model
     }
 
     /**
-     * Получить статистику по номеркам (опционально по розыгрышу)
+     * Получить статистику по номеркам (опционально по розыгрышу).
+     * available = реально свободно для брони (без владельца и без order_id), как в боте.
      */
     public static function getStats(int $telegramBotId, ?int $raffleId = null): array
     {
-        $total = self::where('telegram_bot_id', $telegramBotId)
-            ->when($raffleId !== null, fn ($q) => $q->where('raffle_id', $raffleId))
-            ->count();
-        $issued = self::getIssuedCount($telegramBotId, $raffleId);
-        $available = $total - $issued;
+        $base = self::where('telegram_bot_id', $telegramBotId)
+            ->when($raffleId !== null, fn ($q) => $q->where('raffle_id', $raffleId));
 
-        $reserved = self::where('telegram_bot_id', $telegramBotId)
-            ->when($raffleId !== null, fn ($q) => $q->where('raffle_id', $raffleId))
+        $total = (clone $base)->count();
+        $issued = self::getIssuedCount($telegramBotId, $raffleId);
+
+        $available = (clone $base)
+            ->whereNull('bot_user_id')
+            ->whereNull('order_id')
+            ->count();
+
+        $reserved = (clone $base)
             ->whereNotNull('order_id')
             ->whereHas('order', fn ($q) => $q->where('status', Order::STATUS_RESERVED))
             ->count();
