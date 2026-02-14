@@ -12,6 +12,7 @@ use App\Models\Raffle;
 use App\Services\Telegram\TelegramMenuService;
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
@@ -52,6 +53,16 @@ class TelegramWebhookController extends Controller
                 'has_message' => isset($update['message']),
                 'has_callback_query' => isset($update['callback_query'])
             ]);
+
+            // Идемпотентность: повторная доставка того же update (дубликат webhook) — не обрабатываем
+            $updateId = $update['update_id'] ?? null;
+            if ($updateId !== null) {
+                $cacheKey = 'telegram_processed_update:' . $bot->id . ':' . $updateId;
+                if (!Cache::add($cacheKey, 1, 86400)) {
+                    Log::info('Duplicate update ignored', ['update_id' => $updateId, 'bot_id' => $bot->id]);
+                    return response()->json(['ok' => true]);
+                }
+            }
 
             // Handle message
             if (isset($update['message'])) {
@@ -557,40 +568,35 @@ class TelegramWebhookController extends Controller
                 break;
             
             case BotUser::STATE_WAIT_CHECK_FOR_ORDER:
-                // Ожидание чека для заказа
-                if ($photo || ($document && !$this->isPdfDocument($document))) {
-                    $this->sendMessage($bot, $chatId, '⚠️ Принимаются только PDF-файлы. Загрузите чек в формате PDF.');
-                } elseif ($document && $this->isPdfDocument($document)) {
+                // Ожидание чека: только PDF принимается. Кнопка/текст/не-PDF — подсказка, бронь не меняется, таймер не сбрасывается.
+                $msgAttachPdf = 'Пожалуйста, прикрепите PDF-файл чека в ответ на это сообщение.';
+                if ($photo || ($document && !$this->isPdfDocument($document)) || $text) {
+                    $this->sendMessage($bot, $chatId, $msgAttachPdf);
+                    return;
+                }
+                if ($document && $this->isPdfDocument($document)) {
                     $orderId = $botUser->getFsmDataValue('current_order_id');
-                    
                     if (!$orderId) {
                         $this->sendMessage($bot, $chatId, "⚠️ Заказ не найден. Начните заново с /start");
                         return;
                     }
-                    
                     $order = \App\Models\Order::find($orderId);
-                    
                     if (!$order || $order->bot_user_id != $botUser->id) {
                         $this->sendMessage($bot, $chatId, "⚠️ Заказ не найден. Начните заново с /start");
                         return;
                     }
-                    
-                    // Проверка, не истекла ли бронь
-                    if ($order->isExpired()) {
-                        $order->cancelReservation();
-                        $botUser->resetState();
-                        
-                        $message = $settings->msg_order_expired ?? 
-                            "⏰ Время брони истекло!\n\nЗаказ отменён. Места освобождены.\n\nВы можете оформить новую заявку, нажав /start";
-                        
-                        $this->sendMessage($bot, $chatId, $message);
+                    // PDF после истечения брони — не создаём новую бронь, только сообщение
+                    if ($order->status === \App\Models\Order::STATUS_EXPIRED) {
+                        $this->sendMessage($bot, $chatId, 'Ваша бронь истекла. Пожалуйста, начните заново.');
                         return;
                     }
-                    
-                    // Обрабатываем чек для заказа (getFile → download в checks/ → парсинг → создание Check)
+                    // Уже на проверке (pending): повторный PDF игнорируем как приём, только подтверждаем
+                    if ($order->isReview()) {
+                        $this->sendMessage($bot, $chatId, "Чек получен ✅\n\nОтправлен на проверку.");
+                        return;
+                    }
+                    // Проверка по времени (reserved_until) — внутри handleCheckForOrder в транзакции
                     $this->handleCheckForOrder($bot, $botUser, $chatId, $document, $order, $settings);
-                } elseif ($text) {
-                    $this->sendMessage($bot, $chatId, '📄 Пожалуйста, отправьте чек в формате PDF.');
                 }
                 break;
                 
@@ -3712,6 +3718,12 @@ PYTHON;
             return;
         }
 
+        // В ожидании чека: нажатие любой кнопки (кроме отмены заказа) — напоминание прикрепить PDF, состояние не меняем
+        if ($botUser->fsm_state === BotUser::STATE_WAIT_CHECK_FOR_ORDER && !str_starts_with($data, 'cancel_order:')) {
+            $this->sendMessage($bot, $chatId, 'Пожалуйста, прикрепите PDF-файл чека в ответ на это сообщение.');
+            return;
+        }
+
         // Обработка callback'ов с параметрами
         if (str_starts_with($data, 'quantity:')) {
             $quantity = (int) str_replace('quantity:', '', $data);
@@ -4945,7 +4957,9 @@ PYTHON;
     }
 
     /**
-     * Обработка чека для заказа
+     * Обработка чека для заказа.
+     * В транзакции перечитываем заказ под lockForUpdate: если статус уже не RESERVED (race: expiration или повторный PDF),
+     * не переводим в REVIEW и сообщаем пользователю. Идемпотентность при повторной доставке webhook — на уровне update_id.
      */
     private function handleCheckForOrder(
         TelegramBot $bot,
@@ -5066,46 +5080,66 @@ PYTHON;
         }
 
         try {
-            $check = Check::create([
-                'telegram_bot_id' => $bot->id,
-                'raffle_id' => $order->raffle_id,
-                'bot_user_id' => $botUser->id,
-                'chat_id' => $chatId,
-                'username' => $botUser->username,
-                'first_name' => $botUser->first_name,
-                'file_path' => $filePath,
-                'file_type' => 'pdf',
-                'file_size' => $document['file_size'] ?? 0,
-                'file_hash' => $fileHash,
-                'operation_id' => $operationId,
-                'unique_key' => $uniqueKey,
-                'is_duplicate' => false,
-                'amount' => $checkData['amount'] ?? null,
-                'check_date' => $checkData['date'] ?? null,
-                'ocr_method' => $checkData['ocr_method'] ?? 'unknown',
-                'raw_text' => $rawText,
-                'status' => $checkData['status'] ?? 'failed',
-                'amount_found' => !empty($checkData['amount']),
-                'date_found' => !empty($checkData['date']),
-                'review_status' => 'pending',
-                'parsing_confidence' => $checkData['parsing_confidence'] ?? $checkData['confidence'] ?? null,
-            ]);
+            \Illuminate\Support\Facades\DB::transaction(function () use (
+                $bot, $botUser, $chatId, $document, $settings,
+                $filePath, $fileHash, $operationId, $uniqueKey, $checkData, $rawText
+            ) {
+                $orderLocked = \App\Models\Order::where('id', $order->id)->lockForUpdate()->first();
+                if (!$orderLocked || $orderLocked->bot_user_id != $botUser->id) {
+                    throw new \RuntimeException('Order not found or not yours');
+                }
+                // Race: expiration-job мог уже перевести в expired — не переводим в review
+                if (!$orderLocked->isReserved()) {
+                    throw new \RuntimeException('ORDER_NOT_RESERVED');
+                }
 
-            $order->check_id = $check->id;
-            $order->moveToReview();
-            $botUser->setState(BotUser::STATE_ORDER_REVIEW);
+                $check = Check::create([
+                    'telegram_bot_id' => $bot->id,
+                    'raffle_id' => $orderLocked->raffle_id,
+                    'bot_user_id' => $botUser->id,
+                    'chat_id' => $chatId,
+                    'username' => $botUser->username,
+                    'first_name' => $botUser->first_name,
+                    'file_path' => $filePath,
+                    'file_type' => 'pdf',
+                    'file_size' => $document['file_size'] ?? 0,
+                    'file_hash' => $fileHash,
+                    'operation_id' => $operationId,
+                    'unique_key' => $uniqueKey,
+                    'is_duplicate' => false,
+                    'amount' => $checkData['amount'] ?? null,
+                    'check_date' => $checkData['date'] ?? null,
+                    'ocr_method' => $checkData['ocr_method'] ?? 'unknown',
+                    'raw_text' => $rawText,
+                    'status' => $checkData['status'] ?? 'failed',
+                    'amount_found' => !empty($checkData['amount']),
+                    'date_found' => !empty($checkData['date']),
+                    'review_status' => 'pending',
+                    'parsing_confidence' => $checkData['parsing_confidence'] ?? $checkData['confidence'] ?? null,
+                ]);
 
-            $message = $settings->msg_check_received ??
-                "📄 Чек получен! ✅\n\nСтатус: На проверке у администратора.\n\nМы уведомим вас о результате проверки.";
-            $this->sendMessage($bot, $chatId, $message);
+                $orderLocked->check_id = $check->id;
+                $orderLocked->moveToReview();
+                $orderLocked->save();
 
-            $this->notifyAdminsAboutNewOrder($bot, $order, $check);
+                $botUser->setState(BotUser::STATE_ORDER_REVIEW);
 
-            Log::info("Check uploaded for order", [
-                'order_id' => $order->id,
-                'check_id' => $check->id,
-                'user_id' => $botUser->id,
-            ]);
+                $this->notifyAdminsAboutNewOrder($bot, $orderLocked, $check);
+
+                Log::info("Check uploaded for order", [
+                    'order_id' => $orderLocked->id,
+                    'check_id' => $check->id,
+                    'user_id' => $botUser->id,
+                ]);
+            });
+
+            $this->sendMessage($bot, $chatId, "Чек получен ✅\n\nОтправлен на проверку.");
+        } catch (\RuntimeException $e) {
+            if ($e->getMessage() === 'ORDER_NOT_RESERVED') {
+                $this->sendMessage($bot, $chatId, 'Ваша бронь истекла. Пожалуйста, начните заново.');
+                return;
+            }
+            throw $e;
         } catch (\Throwable $e) {
             Log::error('handleCheckForOrder failed', [
                 'order_id' => $order->id,

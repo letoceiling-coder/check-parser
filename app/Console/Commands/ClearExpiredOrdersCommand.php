@@ -54,38 +54,52 @@ class ClearExpiredOrdersCommand extends Command
         foreach ($expiredOrders as $order) {
             try {
                 DB::transaction(function () use ($order) {
+                    // Идемпотентность: перечитываем заказ под блокировкой (race: пользователь мог только что отправить PDF → REVIEW)
+                    $orderLocked = Order::where('id', $order->id)->lockForUpdate()->with(['botUser', 'raffle', 'telegramBot'])->first();
+                    if (!$orderLocked) {
+                        return;
+                    }
+                    // Не переводим в expired, если статус уже изменился (например на REVIEW при приёме чека)
+                    $isReservedExpired = $orderLocked->status === Order::STATUS_RESERVED
+                        && $orderLocked->reserved_until
+                        && $orderLocked->reserved_until->isPast();
+                    $isReviewExpired = $orderLocked->status === Order::STATUS_REVIEW
+                        && $orderLocked->created_at
+                        && $orderLocked->created_at->lt(now()->subMinutes(self::RESERVATION_MINUTES));
+                    if (!$isReservedExpired && !$isReviewExpired) {
+                        return;
+                    }
+
                     // Освобождаем билеты (возврат в общий пул)
-                    $releasedCount = Ticket::where('order_id', $order->id)
+                    $releasedCount = Ticket::where('order_id', $orderLocked->id)
                         ->update([
                             'order_id' => null,
                             'bot_user_id' => null,
                             'issued_at' => null,
                         ]);
 
-                    if ($order->raffle) {
-                        $order->raffle->decrement('tickets_issued', $releasedCount);
+                    if ($orderLocked->raffle) {
+                        $orderLocked->raffle->decrement('tickets_issued', $releasedCount);
                     }
 
-                    $order->status = Order::STATUS_EXPIRED;
-                    $order->reject_reason = 'Время брони истекло';
-                    $order->save();
+                    $orderLocked->status = Order::STATUS_EXPIRED;
+                    $orderLocked->reject_reason = 'Время брони истекло';
+                    $orderLocked->save();
 
-                    Log::info("Order #{$order->id} expired and cleared", [
-                        'user_id' => $order->bot_user_id,
+                    Log::info("Order #{$orderLocked->id} expired and cleared", [
+                        'user_id' => $orderLocked->bot_user_id,
                         'released_tickets' => $releasedCount,
                     ]);
 
-                    // Уведомляем пользователя, у которого снята бронь
-                    if ($order->botUser && $order->telegramBot) {
-                        $this->notifyUser($order);
+                    if ($orderLocked->botUser && $orderLocked->telegramBot) {
+                        $this->notifyUser($orderLocked);
                     }
 
-                    if ($order->botUser) {
-                        $order->botUser->resetState();
+                    if ($orderLocked->botUser) {
+                        $orderLocked->botUser->resetState();
                     }
 
-                    // Уведомляем остальных участников розыгрыша об освободившихся местах
-                    $this->notifyOtherParticipants($order);
+                    $this->notifyOtherParticipants($orderLocked);
                 });
 
                 $this->info("✓ Order #{$order->id} cleared");
