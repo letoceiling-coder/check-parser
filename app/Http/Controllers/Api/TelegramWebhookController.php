@@ -5135,7 +5135,7 @@ PYTHON;
 
         try {
             \Illuminate\Support\Facades\DB::transaction(function () use (
-                $bot, $botUser, $chatId, $document, $settings,
+                $order, $bot, $botUser, $chatId, $document, $settings,
                 $filePath, $fileHash, $operationId, $uniqueKey, $checkData, $rawText
             ) {
                 $orderLocked = \App\Models\Order::where('id', $order->id)->lockForUpdate()->first();
