@@ -12,6 +12,7 @@ function RaffleSettings({ bot }) {
   const [reservations, setReservations] = useState([]);
   const [qrImageUrl, setQrImageUrl] = useState(null);
   const [statsModal, setStatsModal] = useState(null); // 'issued' | 'reserved' | 'review' | null
+  const [cancellingOrderId, setCancellingOrderId] = useState(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
@@ -87,6 +88,35 @@ function RaffleSettings({ bot }) {
       setError('Ошибка загрузки настроек');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleCancelReservation = async (orderId) => {
+    setCancellingOrderId(orderId);
+    setError(null);
+    setSuccess(null);
+    try {
+      const token = localStorage.getItem('token');
+      const response = await fetch(`${API_URL}/api/bot/${bot.id}/raffle-settings/orders/${orderId}/cancel-reservation`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Accept': 'application/json',
+        },
+      });
+      const data = await response.json().catch(() => ({}));
+      if (response.ok) {
+        setReservations(data.reservations || []);
+        if (data.tickets_stats) setTicketsStats(data.tickets_stats);
+        setSuccess(data.message || 'Бронь отменена.');
+      } else {
+        setError(data.message || 'Не удалось отменить бронь.');
+      }
+    } catch (err) {
+      console.error('Cancel reservation error:', err);
+      setError('Ошибка при отмене брони.');
+    } finally {
+      setCancellingOrderId(null);
     }
   };
 
@@ -327,15 +357,25 @@ function RaffleSettings({ bot }) {
                 ) : (
                   <ul className="space-y-3">
                     {reservations.map((r) => (
-                      <li key={r.order_id} className="border-b border-gray-100 pb-2 last:border-0">
-                        <div className="font-medium text-gray-800">{r.user_name || '—'}{r.username && <span className="text-gray-500 font-normal"> @{r.username}</span>}</div>
-                        <div className="text-sm text-gray-600">Количество: {r.quantity} шт.</div>
-                        <div className="text-sm text-amber-700">
-                          Осталось: {r.minutes_left != null ? `${r.minutes_left} мин` : '—'}
-                          {r.reserved_until && (
-                            <span className="text-gray-500 ml-1">(до {new Date(r.reserved_until).toLocaleString('ru-RU', { hour: '2-digit', minute: '2-digit', day: '2-digit', month: '2-digit', year: 'numeric' })})</span>
-                          )}
+                      <li key={r.order_id} className="border-b border-gray-100 pb-3 last:border-0 flex flex-wrap items-start justify-between gap-2">
+                        <div className="min-w-0 flex-1">
+                          <div className="font-medium text-gray-800">{r.user_name || '—'}{r.username && <span className="text-gray-500 font-normal"> @{r.username}</span>}</div>
+                          <div className="text-sm text-gray-600">Количество: {r.quantity} шт.</div>
+                          <div className="text-sm text-amber-700">
+                            Осталось: {r.minutes_left != null ? `${r.minutes_left} мин` : '—'}
+                            {r.reserved_until && (
+                              <span className="text-gray-500 ml-1">(до {new Date(r.reserved_until).toLocaleString('ru-RU', { hour: '2-digit', minute: '2-digit', day: '2-digit', month: '2-digit', year: 'numeric' })})</span>
+                            )}
+                          </div>
                         </div>
+                        <button
+                          type="button"
+                          onClick={() => handleCancelReservation(r.order_id)}
+                          disabled={cancellingOrderId === r.order_id}
+                          className="shrink-0 px-3 py-1.5 text-sm font-medium text-red-700 bg-red-50 border border-red-200 rounded-lg hover:bg-red-100 disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                          {cancellingOrderId === r.order_id ? 'Отмена…' : 'Отменить бронь'}
+                        </button>
                       </li>
                     ))}
                   </ul>

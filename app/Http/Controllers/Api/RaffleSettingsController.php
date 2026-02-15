@@ -6,8 +6,10 @@ use App\Http\Controllers\Controller;
 use App\Models\BotSettings;
 use App\Models\Order;
 use App\Models\Raffle;
+use App\Models\SlotNotifySubscription;
 use App\Models\TelegramBot;
 use App\Models\Ticket;
+use App\Services\Telegram\TelegramService;
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\Log;
@@ -281,6 +283,99 @@ class RaffleSettingsController extends Controller
         return response()->json([
             'message' => 'Номерки инициализированы',
             'tickets_stats' => Ticket::getStats($bot->id, $activeRaffle->id),
+        ]);
+    }
+
+    /**
+     * Отменить бронь заказа (из попапа «Брони»). Уведомляет пользователя в Telegram и подписчиков «уведомить о местах».
+     */
+    public function cancelReservation(Request $request, int $id, int $orderId): JsonResponse
+    {
+        $bot = TelegramBot::where('user_id', $request->user()->id)
+            ->where('id', $id)
+            ->firstOrFail();
+
+        $order = Order::where('telegram_bot_id', $bot->id)
+            ->where('id', $orderId)
+            ->with(['botUser', 'raffle'])
+            ->firstOrFail();
+
+        if (!$order->isReserved()) {
+            return response()->json([
+                'message' => 'Заказ не в статусе брони или уже обработан.',
+            ], 400);
+        }
+
+        $raffleId = $order->raffle_id;
+        $botUserId = $order->bot_user_id;
+        $chatId = $order->botUser?->telegram_user_id;
+
+        if (!$order->cancelReservation('Бронь отменена администратором')) {
+            return response()->json(['message' => 'Не удалось отменить бронь.'], 500);
+        }
+
+        $settings = BotSettings::getOrCreate($bot->id);
+        $telegram = new TelegramService($bot);
+
+        // Уведомление пользователю, чью бронь сняли
+        $msgCancelled = $settings->msg_reservation_cancelled ?? "⚠️ Ваша бронь снята администратором.\n\nВы можете снова забронировать места через бота (/start).";
+        if ($chatId) {
+            try {
+                $telegram->sendMessage($chatId, $msgCancelled);
+            } catch (\Throwable $e) {
+                Log::warning('Failed to notify user about cancelled reservation', ['order_id' => $orderId, 'error' => $e->getMessage()]);
+            }
+        }
+
+        // Уведомление подписчикам «появились места»
+        $msgSlotsAvailable = $settings->getMessage('slots_available');
+        $subs = SlotNotifySubscription::where('telegram_bot_id', $bot->id)
+            ->where('raffle_id', $raffleId)
+            ->with('botUser')
+            ->get();
+        foreach ($subs as $sub) {
+            if ($sub->bot_user_id === $botUserId) {
+                continue; // не слать тому, кого только что сняли
+            }
+            $subChatId = $sub->botUser?->telegram_user_id;
+            if ($subChatId) {
+                try {
+                    $telegram->sendMessage($subChatId, $msgSlotsAvailable);
+                } catch (\Throwable $e) {
+                    Log::warning('Failed to notify slot subscriber', ['subscription_id' => $sub->id, 'error' => $e->getMessage()]);
+                }
+            }
+        }
+        SlotNotifySubscription::where('telegram_bot_id', $bot->id)->where('raffle_id', $raffleId)->delete();
+
+        $activeRaffle = Raffle::resolveActiveForBot($bot->id);
+        $reservations = [];
+        if ($activeRaffle) {
+            $reservationOrders = Order::where('raffle_id', $activeRaffle->id)
+                ->where('status', Order::STATUS_RESERVED)
+                ->with('botUser')
+                ->orderBy('reserved_until')
+                ->get();
+            foreach ($reservationOrders as $o) {
+                $user = $o->botUser;
+                $reservedUntil = $o->reserved_until ? $o->reserved_until->timezone('Europe/Moscow') : null;
+                $minutesLeft = $reservedUntil && $reservedUntil->isFuture() ? (int) $reservedUntil->diffInMinutes(now()) : 0;
+                $reservations[] = [
+                    'order_id' => $o->id,
+                    'bot_user_id' => $o->bot_user_id,
+                    'user_name' => $user ? trim(($user->first_name ?? '') . ' ' . ($user->last_name ?? '')) : '—',
+                    'username' => $user?->username ?? null,
+                    'quantity' => $o->quantity,
+                    'reserved_until' => $reservedUntil ? $reservedUntil->toIso8601String() : null,
+                    'minutes_left' => $minutesLeft,
+                ];
+            }
+        }
+
+        return response()->json([
+            'message' => 'Бронь отменена. Пользователь и подписчики уведомлены.',
+            'reservations' => $reservations,
+            'tickets_stats' => Ticket::getStats($bot->id, $activeRaffle?->id),
         ]);
     }
 

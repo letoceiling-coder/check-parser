@@ -43,6 +43,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::put('/bot/{id}/raffle-settings', [\App\Http\Controllers\Api\RaffleSettingsController::class, 'update']);
     Route::post('/bot/{id}/raffle-settings/upload-qr', [\App\Http\Controllers\Api\RaffleSettingsController::class, 'uploadQr']);
     Route::post('/bot/{id}/raffle-settings/initialize-tickets', [\App\Http\Controllers\Api\RaffleSettingsController::class, 'initializeTickets']);
+    Route::post('/bot/{id}/raffle-settings/orders/{orderId}/cancel-reservation', [\App\Http\Controllers\Api\RaffleSettingsController::class, 'cancelReservation']);
     
     // Check routes
     Route::get('/checks', [\App\Http\Controllers\Api\CheckController::class, 'index']);

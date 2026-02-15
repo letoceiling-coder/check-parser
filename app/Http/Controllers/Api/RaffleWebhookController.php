@@ -10,6 +10,8 @@ use App\Models\TelegramBot;
 use App\Models\AdminRequest;
 use App\Models\Ticket;
 use App\Models\AdminActionLog;
+use App\Models\Raffle;
+use App\Models\SlotNotifySubscription;
 use App\Services\Telegram\FSM\BotFSM;
 use App\Services\Telegram\TelegramMenuService;
 use App\Services\Telegram\TelegramService;
@@ -238,6 +240,10 @@ class RaffleWebhookController extends Controller
         // Проверяем наличие мест
         if (!$this->settings->hasAvailableSlots()) {
             $this->fsm->setState(BotFSM::STATE_WELCOME);
+            $activeRaffle = Raffle::resolveActiveForBot($this->bot->id);
+            if ($activeRaffle) {
+                SlotNotifySubscription::subscribe($this->bot->id, $activeRaffle->id, $this->botUser->id);
+            }
             $message = $this->settings->getNoSlotsMessage();
             $result = $this->telegram->sendMessage($chatId, $message, $replyKeyboard);
             if ($result && isset($result['result']['message_id'])) {
@@ -632,6 +638,10 @@ class RaffleWebhookController extends Controller
     {
         // Проверяем наличие мест
         if (!$this->settings->hasAvailableSlots()) {
+            $activeRaffle = Raffle::resolveActiveForBot($this->bot->id);
+            if ($activeRaffle) {
+                SlotNotifySubscription::subscribe($this->bot->id, $activeRaffle->id, $this->botUser->id);
+            }
             $this->telegram->sendOrEditMessage(
                 $this->botUser,
                 $this->settings->getNoSlotsMessage(),
