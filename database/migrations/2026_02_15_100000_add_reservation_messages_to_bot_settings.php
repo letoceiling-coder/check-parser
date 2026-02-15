@@ -9,8 +9,12 @@ return new class extends Migration
     public function up(): void
     {
         Schema::table('bot_settings', function (Blueprint $table) {
-            $table->text('msg_reservation_cancelled')->nullable()->after('msg_order_expired');
-            $table->text('msg_slots_available')->nullable()->after('msg_reservation_cancelled');
+            if (!Schema::hasColumn('bot_settings', 'msg_reservation_cancelled')) {
+                $table->text('msg_reservation_cancelled')->nullable()->after('msg_order_expired');
+            }
+            if (!Schema::hasColumn('bot_settings', 'msg_slots_available')) {
+                $table->text('msg_slots_available')->nullable()->after('msg_reservation_cancelled');
+            }
         });
     }
 

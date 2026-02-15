@@ -8,6 +8,9 @@ return new class extends Migration
 {
     public function up(): void
     {
+        if (Schema::hasTable('slot_notify_subscriptions')) {
+            return;
+        }
         Schema::create('slot_notify_subscriptions', function (Blueprint $table) {
             $table->id();
             $table->unsignedBigInteger('telegram_bot_id');
